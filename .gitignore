@@ -1,0 +1,49 @@
+# Python/runtime
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Secrets and local environment
+.env
+.env.*
+env/
+
+# Timelapser generated state and logs
+*.log
+*.jsonl
+scheduler_state.json
+control/
+director_test_shots/
+
+# Timelapse run folders and rendered/transferred media
+20[0-9][0-9][0-9][0-9][0-9][0-9]_*/
+*_v5_wifi/
+*_v5_aperture_priority_wifi/
+frames*/
+frames_*/
+*_render_stage/
+_render_stage/
+_overlay_stage_*/
+*.mp4
+*.mov
+*.orf
+*.ORF
+*.jpg
+*.jpeg
+*.JPG
+*.JPEG
+
+# Recovery/import summaries generated during operation
+fullres_manifest.csv
+fullres_download_summary.json
+render_manifest.csv
+render_summary_v3.json
+postprocess_workflow_summary.json
+sd_fullres_copy_summary_*.json
+v6_beta_usb_import_summary_*.json
+
+# Local backups and one-off archived files
+Old/
+*.zip

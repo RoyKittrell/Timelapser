@@ -1,0 +1,4 @@
+olympuswifi
+openai
+numpy
+opencv-python

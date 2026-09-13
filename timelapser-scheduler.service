@@ -1,0 +1,15 @@
+[Unit]
+Description=Timelapser V5 Sunrise/Sunset Scheduler
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=roy
+WorkingDirectory=/home/roy/Timelapser\x20Sept2026/timelapser_v5
+ExecStart=/home/roy/timelapser-venv/bin/python3 "/home/roy/Timelapser Sept2026/timelapser_v5/timelapser_scheduler.py"
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=multi-user.target
