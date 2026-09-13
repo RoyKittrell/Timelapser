@@ -833,6 +833,16 @@ def main():
         ),
     )
     parser.add_argument(
+        "--read-exposure-every-n",
+        type=int,
+        default=0,
+        help=(
+            "Optional AP-mode exposure readback cadence. Default 0 disables "
+            "readback during capture because some Olympus AP modes return blank "
+            "values and each failed read can cost multiple seconds."
+        ),
+    )
+    parser.add_argument(
         "--post-download-fullres",
         action="store_true",
         help="After a clean run, recover full-resolution JPEGs from the camera SD card.",
@@ -890,6 +900,9 @@ def main():
             "render_after": bool(args.post_render),
             "copy_videos_to_mac_after": bool(args.post_copy_videos_to_mac),
             "mac_video_dest": args.post_mac_video_dest,
+        },
+        "aperture_priority_readback": {
+            "read_exposure_every_n": int(args.read_exposure_every_n),
         },
         "lens_profile": {
             "name": LENS_PROFILE_NAME,
@@ -1020,7 +1033,10 @@ def main():
                 s.last_preview_jpeg = str(local_jpg)
                 s.last_image_metrics = metrics
             state.update(success)
-            snap = refresh_observed_exposure(camera, state, logger)
+            if args.read_exposure_every_n > 0 and frame_no % args.read_exposure_every_n == 0:
+                snap = refresh_observed_exposure(camera, state, logger)
+            else:
+                snap = state.snapshot()
 
             scene_history.append({
                 "monotonic": time.monotonic(),

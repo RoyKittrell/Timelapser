@@ -269,6 +269,7 @@ def run_preflight(mod, m: Mission) -> tuple[bool, list[str]]:
 
 def build_command(mod, m: Mission, now: datetime) -> list[str]:
     remaining = max(0, int((m.end_dt - now).total_seconds()))
+    max_run_minutes = max(1.0, remaining / 60.0)
     max_by_time = max(1, int(remaining // m.interval))
 
     if m.max_frames is not None:
@@ -284,6 +285,7 @@ def build_command(mod, m: Mission, now: datetime) -> list[str]:
         "--mode", m.mode,
         "--interval", str(m.interval),
         "--max-frames", str(max_frames),
+        "--max-run-minutes", str(max_run_minutes),
         "--transfer-mode", m.transfer_mode,
         "--iso", str(m.iso),
         "--aperture", str(m.aperture),
