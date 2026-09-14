@@ -380,6 +380,8 @@ def main() -> int:
     parser.add_argument("--repair-passes", type=int, default=5)
     parser.add_argument("--operation-timeout", type=float, default=120.0,
                         help="Hard timeout in seconds for one Olympus HTTP operation")
+    parser.add_argument("--reset-session-every", type=int, default=0,
+                        help="Reconnect the Olympus API session after every N successful downloads; 0 disables proactive resets")
     parser.add_argument("--retry-delay", type=float, default=2.0)
     parser.add_argument("--inventory-timeout", type=float, default=180.0)
     parser.add_argument("--skip-inventory", action="store_true",
@@ -626,12 +628,30 @@ def main() -> int:
                 f"{len(pending)} pending frame(s) ---"
             )
             successes = 0
+            successes_since_reset = 0
             still_pending: list[ExpectedFrame] = []
 
             for item in pending:
                 if download_one(item):
                     complete.add(item.frame)
                     successes += 1
+                    successes_since_reset += 1
+                    if (
+                        args.reset_session_every > 0
+                        and successes_since_reset >= args.reset_session_every
+                        and item is not pending[-1]
+                    ):
+                        try:
+                            session.reset(
+                                f"proactive reset after {successes_since_reset} successful downloads",
+                                args.retry_delay,
+                            )
+                        except Exception as exc:
+                            log.write(
+                                f"Proactive session reset failed: "
+                                f"{type(exc).__name__}: {exc}"
+                            )
+                        successes_since_reset = 0
                 else:
                     still_pending.append(item)
 

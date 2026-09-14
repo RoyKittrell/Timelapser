@@ -187,6 +187,8 @@ def run_postprocess(
                     "5",
                     "--operation-timeout",
                     "120",
+                    "--reset-session-every",
+                    "50",
                 ],
                 root,
             )
