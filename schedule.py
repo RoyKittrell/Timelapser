@@ -37,7 +37,7 @@ TIMELAPSER_SCRIPT = "/home/roy/Timelapser Sept2026/timelapser_v5/timelapser_v5_a
 # Optional post-run commands. These run only after capture stops cleanly.
 DEFAULT_DOWNLOAD_FULLRES_AFTER = True
 DEFAULT_RENDER_AFTER = True
-DEFAULT_COPY_VIDEOS_TO_MAC_AFTER = True
+DEFAULT_COPY_VIDEOS_TO_MAC_AFTER = False
 DEFAULT_MAC_VIDEO_DEST = "roy@192.168.100.191:/Users/roy/Documents/ChatGPT/Timelapser/rendered_videos"
 
 # Exposure/capture defaults.
