@@ -22,6 +22,7 @@ from pathlib import Path
 DEFAULT_MAC_VIDEO_DEST = (
     "roy@192.168.100.191:/Users/roy/Documents/ChatGPT/Timelapser/rendered_videos"
 )
+DEFAULT_TIMELAPSER_PYTHON = "/home/roy/timelapser-venv/bin/python3"
 
 
 def _log(log_path: Path, message: str) -> None:
@@ -53,6 +54,15 @@ def _run_step(log_path: Path, name: str, cmd: list[str], cwd: Path) -> dict:
         "returncode": proc.returncode,
         "elapsed_seconds": elapsed,
     }
+
+
+def _python_executable() -> str:
+    configured = os.environ.get("TIMELAPSER_PYTHON")
+    if configured and Path(configured).exists():
+        return configured
+    if Path(DEFAULT_TIMELAPSER_PYTHON).exists():
+        return DEFAULT_TIMELAPSER_PYTHON
+    return sys.executable
 
 
 def _split_remote_dest(dest: str) -> tuple[str, str] | None:
@@ -135,6 +145,7 @@ def run_postprocess(
     log_path = run_dir / "postprocess_workflow.log"
     summary_path = run_dir / "postprocess_workflow_summary.json"
     dest = mac_video_dest or os.environ.get("TIMELAPSER_MAC_VIDEO_DEST") or DEFAULT_MAC_VIDEO_DEST
+    python = _python_executable()
 
     summary = {
         "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -157,7 +168,7 @@ def run_postprocess(
                 log_path,
                 "download_fullres_jpegs",
                 [
-                    sys.executable,
+                    python,
                     str(root / "download_run_fullres.py"),
                     str(run_dir),
                     "--attempts-per-frame",
@@ -180,7 +191,7 @@ def run_postprocess(
                 log_path,
                 "render_videos",
                 [
-                    sys.executable,
+                    python,
                     str(root / "render_timelapse.py"),
                     str(run_dir),
                     "--source",
