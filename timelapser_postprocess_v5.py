@@ -25,12 +25,22 @@ DEFAULT_MAC_VIDEO_DEST = (
 DEFAULT_TIMELAPSER_PYTHON = "/home/roy/timelapser-venv/bin/python3"
 
 
+def _print_stdout(message: str) -> None:
+    try:
+        print(message, flush=True)
+    except BrokenPipeError:
+        try:
+            sys.stdout = open(os.devnull, "w", encoding="utf-8")
+        except Exception:
+            pass
+
+
 def _log(log_path: Path, message: str) -> None:
     stamp = datetime.now().astimezone().isoformat(timespec="seconds")
     line = f"{stamp}  {message}"
-    print(line, flush=True)
     with log_path.open("a", encoding="utf-8") as f:
         f.write(line + "\n")
+    _print_stdout(line)
 
 
 def _run_step(log_path: Path, name: str, cmd: list[str], cwd: Path) -> dict:
@@ -241,7 +251,7 @@ def main() -> int:
         copy_videos_to_mac=not args.skip_copy_videos_to_mac,
         mac_video_dest=args.mac_video_dest,
     )
-    print(json.dumps(summary, indent=2, default=str))
+    _print_stdout(json.dumps(summary, indent=2, default=str))
     return 0 if summary.get("status") == "complete" else 1
 
 
