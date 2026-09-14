@@ -584,6 +584,137 @@ def format_bytes(num: float) -> str:
     return f'{value:.1f} TB'
 
 
+def count_jpegs(folder: Path) -> int:
+    if not folder.exists():
+        return 0
+    try:
+        return sum(1 for p in folder.iterdir() if p.is_file() and p.suffix.lower() in {'.jpg', '.jpeg'})
+    except Exception:
+        return 0
+
+
+def active_fullres_download_process(run_dir: Path) -> bool:
+    try:
+        cp = subprocess.run(
+            ['ps', '-eo', 'pid=,args='],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except Exception:
+        return False
+
+    run_text = str(run_dir)
+    return any('download_run_fullres.py' in line and run_text in line for line in cp.stdout.splitlines())
+
+
+def _file_time_bounds(folder: Path) -> tuple[datetime | None, datetime | None]:
+    first: datetime | None = None
+    last: datetime | None = None
+    if not folder.exists():
+        return first, last
+    try:
+        for p in folder.iterdir():
+            if not p.is_file() or p.suffix.lower() not in {'.jpg', '.jpeg'}:
+                continue
+            dt = datetime.fromtimestamp(p.stat().st_mtime).astimezone()
+            first = dt if first is None or dt < first else first
+            last = dt if last is None or dt > last else last
+    except Exception:
+        pass
+    return first, last
+
+
+def fullres_download_status(run_dir: Path, df: pd.DataFrame) -> dict[str, Any] | None:
+    full_dir = run_dir / 'frames_full_jpeg'
+    log_path = run_dir / 'fullres_download.log'
+    summary = read_json(run_dir / 'fullres_download_summary.json')
+    downloaded = count_jpegs(full_dir)
+
+    total = 0
+    if not df.empty and 'frame' in df.columns:
+        nums = pd.to_numeric(df['frame'], errors='coerce').dropna()
+        if not nums.empty:
+            total = int(nums.max())
+    total = max(total, count_jpegs(run_dir / 'frames_jpeg'))
+    try:
+        total = max(total, int(summary.get('total_frames') or 0))
+    except Exception:
+        pass
+
+    if not downloaded and not total and not log_path.exists() and not summary:
+        return None
+
+    active = active_fullres_download_process(run_dir)
+    complete = bool(total and downloaded >= total)
+    state = 'complete' if complete else 'active' if active else 'not running'
+    pct = (downloaded / total) if total else 0.0
+
+    first_file, last_file = _file_time_bounds(full_dir)
+    now = datetime.now().astimezone()
+    elapsed_s: int | None = None
+    seconds_per_frame: float | None = None
+    eta_s: int | None = None
+    finish_at: datetime | None = None
+
+    if first_file and downloaded:
+        end_time = now if active and not complete else last_file or now
+        elapsed_s = max(0, int((end_time - first_file).total_seconds()))
+        if elapsed_s > 0:
+            seconds_per_frame = elapsed_s / max(downloaded, 1)
+            if total and downloaded < total:
+                eta_s = int((total - downloaded) * seconds_per_frame)
+                finish_at = now + timedelta(seconds=eta_s)
+
+    return {
+        'state': state,
+        'downloaded': downloaded,
+        'total': total,
+        'pct': pct,
+        'elapsed_s': elapsed_s,
+        'seconds_per_frame': seconds_per_frame,
+        'eta_s': eta_s,
+        'finish_at': finish_at,
+        'log_path': str(log_path) if log_path.exists() else '',
+    }
+
+
+def render_fullres_download_status(run_dir: Path, df: pd.DataFrame) -> None:
+    status = fullres_download_status(run_dir, df)
+    if not status:
+        return
+
+    downloaded = int(status['downloaded'])
+    total = int(status['total'])
+    pct = float(status['pct'])
+    pct_label = f'{pct * 100.0:.1f}%' if total else '—'
+    count_label = f'{downloaded}/{total}' if total else f'{downloaded}'
+
+    st.markdown('### Full JPEG download')
+    cols = st.columns(4)
+    cols[0].metric('Status', str(status['state']).title())
+    cols[1].metric('Progress', count_label)
+    cols[2].metric('Complete', pct_label)
+    eta_s = status.get('eta_s')
+    cols[3].metric('ETA', format_countdown(float(eta_s)) if eta_s is not None else '—')
+    if total:
+        st.progress(min(1.0, max(0.0, pct)))
+
+    detail = []
+    elapsed_s = status.get('elapsed_s')
+    spf = status.get('seconds_per_frame')
+    finish_at = status.get('finish_at')
+    if elapsed_s is not None:
+        detail.append(f'elapsed {format_countdown(float(elapsed_s))}')
+    if spf is not None:
+        detail.append(f'average {float(spf):.1f}s/frame')
+    if finish_at is not None:
+        detail.append(f'estimated finish {finish_at.strftime("%H:%M %Z")}')
+    if detail:
+        st.caption(' · '.join(detail))
+
+
 def format_seconds(value: Any) -> str:
     try:
         seconds = float(value)
@@ -1329,6 +1460,7 @@ def render_live_panel():
     st.caption(next_detail)
     st.metric('Camera SD Card capacity', sd_label)
     st.caption(sd_detail)
+    render_fullres_download_status(run_dir, df)
 
     top = st.columns(5)
     top[0].metric('Frame', frame_no if frame_no else '—')
