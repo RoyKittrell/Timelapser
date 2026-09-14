@@ -18,7 +18,6 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 from dotenv import load_dotenv
 from PIL import Image
 
@@ -117,37 +116,6 @@ st.markdown(
     </style>
     """,
     unsafe_allow_html=True,
-)
-
-components.html(
-    """
-    <script>
-    (() => {
-        const isMobile = window.matchMedia("(max-width: 768px)").matches;
-        if (!isMobile) return;
-
-        const scrollTop = () => {
-            try {
-                const doc = window.parent.document;
-                const active = doc.activeElement;
-                if (active && /input|textarea/i.test(active.tagName)) {
-                    active.blur();
-                }
-                window.parent.scrollTo({ top: 0, left: 0, behavior: "auto" });
-                doc.documentElement.scrollTop = 0;
-                doc.body.scrollTop = 0;
-            } catch (err) {
-                window.scrollTo({ top: 0, left: 0, behavior: "auto" });
-            }
-        };
-
-        setTimeout(scrollTop, 150);
-        setTimeout(scrollTop, 700);
-        setTimeout(scrollTop, 1500);
-    })();
-    </script>
-    """,
-    height=0,
 )
 
 
@@ -1667,39 +1635,49 @@ else:
     st.info('Upgrade Streamlit for automatic 5-second dashboard refresh.')
 
 st.divider()
-st.header('💬 Ask the AI Director')
-st.caption('Chat over run telemetry, plus constrained commands: start a timelapse now, or stop the current timelapse gracefully.')
 
 chat_key = f'messages::{run_dir}'
 if chat_key not in st.session_state:
     st.session_state[chat_key] = []
 
-for msg in st.session_state[chat_key]:
-    with st.chat_message(msg['role']):
-        st.markdown(msg['content'])
+with st.expander('Ask the AI Director', expanded=False):
+    st.caption('Chat over run telemetry, plus constrained commands: start a timelapse now, or stop the current timelapse gracefully.')
 
-question = st.chat_input('Ask what the sunset is doing, why exposure changed, whether cadence is healthy…')
-if question:
-    st.session_state[chat_key].append({'role': 'user', 'content': question})
-    with st.chat_message('user'):
-        st.markdown(question)
+    for msg in st.session_state[chat_key]:
+        with st.chat_message(msg['role']):
+            st.markdown(msg['content'])
 
-    operator_answer = handle_operator_command(question)
-    basic_answer = None if operator_answer is not None else handle_basic_status_query(question)
-    if operator_answer is not None:
-        answer = operator_answer
-    elif basic_answer is not None:
-        answer = basic_answer
-    else:
-        api_key = os.getenv('OPENAI_API_KEY')
-        if not api_key:
-            answer = f'OPENAI_API_KEY was not found in {ENV_FILE}.'
+    with st.form(f'director_question_form::{run_dir}', clear_on_submit=True):
+        question = st.text_area(
+            'Question',
+            placeholder='Ask what the sunset is doing, why exposure changed, whether cadence is healthy...',
+            height=90,
+            key=f'director_question::{run_dir}',
+        )
+        submitted = st.form_submit_button('Send')
+
+    if submitted and question.strip():
+        question = question.strip()
+        st.session_state[chat_key].append({'role': 'user', 'content': question})
+        with st.chat_message('user'):
+            st.markdown(question)
+
+        operator_answer = handle_operator_command(question)
+        basic_answer = None if operator_answer is not None else handle_basic_status_query(question)
+        if operator_answer is not None:
+            answer = operator_answer
+        elif basic_answer is not None:
+            answer = basic_answer
         else:
-            try:
-                from openai import OpenAI
+            api_key = os.getenv('OPENAI_API_KEY')
+            if not api_key:
+                answer = f'OPENAI_API_KEY was not found in {ENV_FILE}.'
+            else:
+                try:
+                    from openai import OpenAI
 
-                client = OpenAI(api_key=api_key)
-                instructions = '''You are the Timelapser V5 Director for an Olympus camera controlled by a Raspberry Pi over the Olympus Wi-Fi protocol.
+                    client = OpenAI(api_key=api_key)
+                    instructions = '''You are the Timelapser V5 Director for an Olympus camera controlled by a Raspberry Pi over the Olympus Wi-Fi protocol.
 
 Use ONLY the supplied current run state, telemetry, image metrics, logs, errors and recorded AI decisions for factual claims about this run. You may explain photographic concepts when useful.
 
@@ -1716,19 +1694,19 @@ V5 facts:
 - The Director still has no direct camera authority and never sends Olympus camera commands itself.
 
 Be concise but technically useful. If evidence is missing, say so.'''
-                response = client.responses.create(
-                    model='gpt-5.6-luna',
-                    instructions=instructions,
-                    input=(
-                        f'CURRENT DIRECTOR CLOCK:\n{director_clock_context()}\n\n'
-                        f'CURRENT V5 RUN DATA:\n{collect_context(run_dir)}\n\n'
-                        f'OPERATOR QUESTION:\n{question}'
-                    ),
-                )
-                answer = response.output_text
-            except Exception as exc:
-                answer = f'AI request failed: {type(exc).__name__}: {exc}'
+                    response = client.responses.create(
+                        model='gpt-5.6-luna',
+                        instructions=instructions,
+                        input=(
+                            f'CURRENT DIRECTOR CLOCK:\n{director_clock_context()}\n\n'
+                            f'CURRENT V5 RUN DATA:\n{collect_context(run_dir)}\n\n'
+                            f'OPERATOR QUESTION:\n{question}'
+                        ),
+                    )
+                    answer = response.output_text
+                except Exception as exc:
+                    answer = f'AI request failed: {type(exc).__name__}: {exc}'
 
-    with st.chat_message('assistant'):
-        st.markdown(answer)
-    st.session_state[chat_key].append({'role': 'assistant', 'content': answer})
+        with st.chat_message('assistant'):
+            st.markdown(answer)
+        st.session_state[chat_key].append({'role': 'assistant', 'content': answer})
