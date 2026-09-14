@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 from PIL import Image
 
@@ -116,6 +117,37 @@ st.markdown(
     </style>
     """,
     unsafe_allow_html=True,
+)
+
+components.html(
+    """
+    <script>
+    (() => {
+        const isMobile = window.matchMedia("(max-width: 768px)").matches;
+        if (!isMobile) return;
+
+        const scrollTop = () => {
+            try {
+                const doc = window.parent.document;
+                const active = doc.activeElement;
+                if (active && /input|textarea/i.test(active.tagName)) {
+                    active.blur();
+                }
+                window.parent.scrollTo({ top: 0, left: 0, behavior: "auto" });
+                doc.documentElement.scrollTop = 0;
+                doc.body.scrollTop = 0;
+            } catch (err) {
+                window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+            }
+        };
+
+        setTimeout(scrollTop, 150);
+        setTimeout(scrollTop, 700);
+        setTimeout(scrollTop, 1500);
+    })();
+    </script>
+    """,
+    height=0,
 )
 
 
