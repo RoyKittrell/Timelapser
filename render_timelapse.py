@@ -194,6 +194,65 @@ def fmt_shutter(seconds: float) -> str:
     return f"1/{denom}s" if denom else f"{seconds:.4f}s"
 
 
+def enrich_rows_with_exif(rows: list[dict], manifest: list[dict]) -> str:
+    """Prefer actual JPEG EXIF exposure for overlays when full-res files exist."""
+    if not rows or not manifest or shutil.which("exiftool") is None:
+        return "telemetry"
+
+    files: list[str] = []
+    source_to_frame: dict[str, int] = {}
+    for item in manifest:
+        source = str(item.get("source_file") or "")
+        if not source:
+            continue
+        files.append(source)
+        try:
+            source_to_frame[source] = int(item["frame"])
+        except (TypeError, ValueError):
+            continue
+
+    row_by_frame: dict[int, dict] = {}
+    for row in rows:
+        try:
+            row_by_frame[int(float(str(row.get("frame", "")).strip()))] = row
+        except (TypeError, ValueError):
+            continue
+
+    enriched = 0
+    batch_size = 200
+    for start in range(0, len(files), batch_size):
+        cmd = [
+            "exiftool",
+            "-j",
+            "-n",
+            "-ExposureTime",
+            "-FNumber",
+            "-ISO",
+            *files[start:start + batch_size],
+        ]
+        try:
+            proc = subprocess.run(cmd, text=True, capture_output=True, check=False)
+            if proc.returncode != 0:
+                continue
+            payload = json.loads(proc.stdout or "[]")
+        except Exception:
+            continue
+        for exif in payload:
+            source = str(exif.get("SourceFile") or "")
+            row = row_by_frame.get(source_to_frame.get(source, -1))
+            if row is None:
+                continue
+            if exif.get("ISO") is not None:
+                row["actual_iso"] = exif["ISO"]
+            if exif.get("FNumber") is not None:
+                row["actual_aperture"] = exif["FNumber"]
+            if exif.get("ExposureTime") is not None:
+                row["actual_shutter_seconds"] = exif["ExposureTime"]
+            if any(k in row for k in ("actual_iso", "actual_aperture", "actual_shutter_seconds")):
+                enriched += 1
+    return "exif" if enriched else "telemetry"
+
+
 def short_time(row: dict) -> str:
     raw = textval(row, "time", "timestamp")
     if not raw: return "—"
@@ -304,7 +363,9 @@ def make_overlay_frames(kind: str, rows: list[dict], expected: list[ExpectedFram
             if cfg.DIRECTOR_SHOW_TIME: meta.append(short_time(row))
             if meta: txt(d, (x,y), "   ".join(meta), f_med); y += int(height*(cfg.TEXT_SIZE_MEDIUM + cfg.DIRECTOR_LINE_SPACING))
             if cfg.DIRECTOR_SHOW_EXPOSURE:
-                iso = num(row, "iso"); ap = num(row, "aperture"); sh = num(row, "shutter_seconds")
+                iso = num(row, "actual_iso", "iso")
+                ap = num(row, "actual_aperture", "aperture")
+                sh = num(row, "actual_shutter_seconds", "shutter_seconds")
                 iso_s = str(int(round(iso))) if math.isfinite(iso) else "—"
                 ap_s = f"ƒ/{ap:g}" if math.isfinite(ap) else "ƒ/—"
                 txt(d, (x,y), f"ISO {iso_s}   {ap_s}   {fmt_shutter(sh)}", f_large); y += int(height*(cfg.TEXT_SIZE_LARGE + cfg.DIRECTOR_LINE_SPACING))
@@ -322,13 +383,17 @@ def make_overlay_frames(kind: str, rows: list[dict], expected: list[ExpectedFram
                 change_i = None
                 for j in range(i, max(0, i-hold), -1):
                     prev, cur = rows[j-1], rows[j]
-                    keys = ("iso", "aperture", "shutter_seconds")
+                    keys = ("actual_iso", "actual_aperture", "actual_shutter_seconds")
+                    if not any(k in cur for k in keys):
+                        keys = ("iso", "aperture", "shutter_seconds")
                     if any(num(prev,k) != num(cur,k) for k in keys):
                         change_i = j
                         break
                 if change_i is not None:
                     cur = rows[change_i]
-                    iso = num(cur, "iso"); ap = num(cur, "aperture"); sh = num(cur, "shutter_seconds")
+                    iso = num(cur, "actual_iso", "iso")
+                    ap = num(cur, "actual_aperture", "aperture")
+                    sh = num(cur, "actual_shutter_seconds", "shutter_seconds")
                     iso_s = str(int(round(iso))) if math.isfinite(iso) else "—"
                     ap_s = f"ƒ/{ap:g}" if math.isfinite(ap) else "ƒ/—"
                     update = f"CAMERA UPDATE  ✓  ISO {iso_s}   {ap_s}   {fmt_shutter(sh)}"
@@ -394,6 +459,7 @@ def main() -> int:
         for item in missing[:40]: print(f"  frame {item.frame:06d}: {item.basename}")
         return 2
     write_manifest(run_dir / "render_manifest.csv", manifest)
+    exposure_metadata_source = enrich_rows_with_exif(telemetry_rows, manifest)
 
     out_dir = (args.output_dir.expanduser().resolve() if args.output_dir else run_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -405,7 +471,7 @@ def main() -> int:
     if args.dry_run:
         # Also validate brightness if an overlay output was requested.
         if any(x in outputs for x in ("brightness","director")): brightness_series(telemetry_rows)
-        print("DRY RUN COMPLETE: frame mapping and requested overlay telemetry validated.")
+        print(f"DRY RUN COMPLETE: frame mapping and requested overlay telemetry validated. Exposure metadata: {exposure_metadata_source}.")
         if not args.keep_stage: shutil.rmtree(stage)
         return 0
     if shutil.which("ffmpeg") is None: raise SystemExit("ffmpeg not found. Install with: sudo apt install ffmpeg")
@@ -430,6 +496,7 @@ def main() -> int:
         "frames":len(expected), "fps":cfg["fps"], "width":cfg["width"], "height":cfg["height"],
         "framing":cfg["framing"], "preset":cfg["preset"], "crf":cfg["crf"], "outputs":results,
         "overlay_config":str(args.overlay_config.expanduser().resolve()),
+        "exposure_metadata_source": exposure_metadata_source,
         "status":"complete" if results and all(r["returncode"]==0 for r in results) and len(results)==len(outputs) else "failed",
     }
     (run_dir / "render_summary_v3.json").write_text(json.dumps(summary,indent=2),encoding="utf-8")
