@@ -67,6 +67,57 @@ st.set_page_config(
     initial_sidebar_state='expanded',
 )
 
+st.markdown(
+    """
+    <style>
+    html, body, [data-testid="stAppViewContainer"] {
+        max-width: 100vw;
+        overflow-x: hidden;
+    }
+
+    [data-testid="stMetricValue"] {
+        overflow-wrap: anywhere;
+        white-space: normal;
+    }
+
+    img, video, canvas, svg {
+        max-width: 100%;
+        height: auto;
+    }
+
+    pre, code, [data-testid="stJson"] {
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+
+    @media (max-width: 768px) {
+        .block-container {
+            max-width: 100vw;
+            padding-left: 1rem;
+            padding-right: 1rem;
+            padding-top: 1.25rem;
+        }
+
+        [data-testid="column"] {
+            width: 100% !important;
+            flex: 1 1 100% !important;
+            min-width: 0 !important;
+        }
+
+        [data-testid="stHorizontalBlock"] {
+            flex-wrap: wrap;
+            gap: 0.35rem;
+        }
+
+        [data-testid="stMetric"] {
+            min-width: 0;
+        }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 
 # -----------------------------------------------------------------------------
 # Files / process helpers. Normal timelapse start/stop still goes through
