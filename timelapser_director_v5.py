@@ -219,11 +219,63 @@ def latest_jpeg(run_dir: Path) -> Path | None:
     return scout if scout.exists() else None
 
 
-def latest_test_shot() -> Path | None:
-    if not TEST_SHOTS_DIR.exists():
+def run_test_shots_dir(run_dir: Path) -> Path:
+    return run_dir / 'director_test_shots'
+
+
+def _path_is_inside(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+        return True
+    except Exception:
+        return False
+
+
+def latest_test_shot(run_dir: Path | None = None) -> Path | None:
+    base = run_test_shots_dir(run_dir) if run_dir is not None else TEST_SHOTS_DIR
+    if not base.exists():
         return None
-    imgs = list(TEST_SHOTS_DIR.glob('*/final_full.jpg'))
+    imgs = list(base.glob('*/final_full.jpg'))
     return max(imgs, key=lambda p: p.stat().st_mtime) if imgs else None
+
+
+def display_test_shot_for_run(run_dir: Path) -> Path | None:
+    session_path = st.session_state.get('latest_test_shot_path')
+    if session_path:
+        candidate = Path(session_path)
+        if candidate.exists() and _path_is_inside(candidate, run_test_shots_dir(run_dir)):
+            return candidate
+    return latest_test_shot(run_dir)
+
+
+def cleanup_test_shots_if_frames_deleted(run_dir: Path) -> None:
+    test_dir = run_test_shots_dir(run_dir)
+    if not test_dir.exists() or not (run_dir / 'run_summary.json').exists():
+        return
+
+    frame_dirs = [
+        run_dir / 'frames_jpeg',
+        run_dir / 'frames_full_jpeg',
+        run_dir / 'frames_smoothed_luma_v2',
+    ]
+    if any(count_jpegs(folder) > 0 for folder in frame_dirs):
+        return
+
+    try:
+        shutil.rmtree(test_dir)
+        if st.session_state.get('latest_test_shot_path') and _path_is_inside(
+            Path(st.session_state['latest_test_shot_path']),
+            test_dir,
+        ):
+            st.session_state.pop('latest_test_shot_path', None)
+            st.session_state.pop('hidden_test_shot_path', None)
+    except Exception as exc:
+        append_control_log({
+            'action': 'test_shot_cleanup_failed',
+            'run_dir': str(run_dir),
+            'error_type': type(exc).__name__,
+            'error': str(exc),
+        })
 
 
 def latest_test_shot_summary(path: Path | None) -> dict[str, Any]:
@@ -287,7 +339,7 @@ def camera_api_preflight(timeout: float = 3.0) -> tuple[bool, str]:
         return False, f'{type(exc).__name__}: {exc}'
 
 
-def show_test_shot() -> str:
+def show_test_shot(run_dir: Path | None = None) -> str:
     active = active_v5_processes()
     if active:
         return (
@@ -306,7 +358,8 @@ def show_test_shot() -> str:
         )
 
     stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    shot_dir = TEST_SHOTS_DIR / stamp
+    shot_base = run_test_shots_dir(run_dir) if run_dir is not None else TEST_SHOTS_DIR
+    shot_dir = shot_base / stamp
     shot_dir.mkdir(parents=True, exist_ok=True)
     logger = RunLogger(shot_dir)
     camera = WifiCameraController(logger)
@@ -368,6 +421,7 @@ def show_test_shot() -> str:
         summary = {
             'kind': 'director_test_shot',
             'created_at': datetime.now().astimezone().isoformat(timespec='seconds'),
+            'run_dir': str(run_dir) if run_dir is not None else '',
             'shot_dir': str(shot_dir),
             'display_image': 'final_full',
             'scout_remote_jpg': scout.remote_jpg,
@@ -1325,14 +1379,14 @@ def request_timelapse_stop(reason: str) -> str:
     )
 
 
-def handle_operator_command(text: str) -> str | None:
+def handle_operator_command(text: str, current_run_dir: Path) -> str | None:
     cmd = parse_operator_command(text)
     if cmd is None:
         return None
     if cmd['action'] == 'unsupported_future_start':
         return schedule_edit_answer()
     if cmd['action'] == 'test_shot':
-        return show_test_shot()
+        return show_test_shot(current_run_dir)
     if cmd['action'] == 'stop':
         return request_timelapse_stop(cmd['reason'])
     if cmd['action'] == 'schedule_future':
@@ -1527,7 +1581,8 @@ def render_live_panel():
     second[3].metric('Worst cycle', format_seconds(worst_cycle))
     second[4].metric('Logged errors', len(errors))
 
-    test_image_path = Path(st.session_state.get('latest_test_shot_path') or '') if st.session_state.get('latest_test_shot_path') else latest_test_shot()
+    cleanup_test_shots_if_frames_deleted(run_dir)
+    test_image_path = display_test_shot_for_run(run_dir)
     hidden_test_shot = st.session_state.get('hidden_test_shot_path')
     if test_image_path and test_image_path.exists() and str(test_image_path) != hidden_test_shot:
         test_summary = latest_test_shot_summary(test_image_path)
@@ -1662,7 +1717,7 @@ with st.expander('Ask the AI Director', expanded=False):
         with st.chat_message('user'):
             st.markdown(question)
 
-        operator_answer = handle_operator_command(question)
+        operator_answer = handle_operator_command(question, run_dir)
         basic_answer = None if operator_answer is not None else handle_basic_status_query(question)
         if operator_answer is not None:
             answer = operator_answer
