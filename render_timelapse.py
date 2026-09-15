@@ -187,6 +187,29 @@ def brightness_series(rows: list[dict]) -> list[float]:
     return out
 
 
+def brightness_series_from_sources(manifest: list[dict], max_edge: int = 512) -> list[float]:
+    try:
+        import numpy as np
+        from PIL import Image, ImageOps
+    except ImportError:
+        raise SystemExit("Frame brightness analysis requires Pillow and NumPy")
+
+    values = []
+    for index, item in enumerate(manifest, start=1):
+        source = Path(str(item["source_file"]))
+        image = Image.open(source)
+        image = ImageOps.exif_transpose(image).convert("RGB")
+        if max(image.size) > max_edge:
+            image.thumbnail((max_edge, max_edge), Image.Resampling.BICUBIC)
+        arr = np.asarray(image, dtype=np.float32) / 255.0
+        linear = np.where(arr <= 0.04045, arr / 12.92, ((arr + 0.055) / 1.055) ** 2.4)
+        lum = 0.2126 * linear[..., 0] + 0.7152 * linear[..., 1] + 0.0722 * linear[..., 2]
+        values.append(float(np.median(lum)))
+        if index % 100 == 0 or index == len(manifest):
+            print(f"[{index}/{len(manifest)}] measured frame brightness")
+    return values
+
+
 def fmt_shutter(seconds: float) -> str:
     if not math.isfinite(seconds) or seconds <= 0: return "—"
     if seconds >= 1: return f"{seconds:g}s"
@@ -262,6 +285,28 @@ def short_time(row: dict) -> str:
         return raw[-12:-4] if len(raw) >= 8 else raw
 
 
+def clock_label(row: dict) -> str:
+    raw = textval(row, "time", "timestamp")
+    if not raw:
+        return ""
+    try:
+        return datetime.fromisoformat(raw).strftime("%H:%M")
+    except Exception:
+        return raw[-8:-3] if len(raw) >= 5 else raw
+
+
+def date_label(rows: list[dict]) -> str:
+    for row in rows:
+        raw = textval(row, "time", "timestamp")
+        if not raw:
+            continue
+        try:
+            return datetime.fromisoformat(raw).strftime("%d %b %Y").lstrip("0")
+        except Exception:
+            continue
+    return ""
+
+
 def _safe_rect(cfg, width, height):
     left = int(round(width * cfg.MARGIN_LEFT)); right = int(round(width * (1-cfg.MARGIN_RIGHT)))
     top = int(round(height * cfg.MARGIN_TOP)); bottom = int(round(height * (1-cfg.MARGIN_BOTTOM)))
@@ -284,14 +329,14 @@ def _graph_rect(cfg, safe, width, height, kind):
 
 
 def make_overlay_frames(kind: str, rows: list[dict], expected: list[ExpectedFrame], width: int, height: int,
-                        cfg, out_dir: Path):
+                        cfg, out_dir: Path, bright_values: list[float] | None = None):
     try:
         from PIL import Image, ImageDraw, ImageFont
     except ImportError:
         raise SystemExit("Overlay rendering requires Pillow: pip install pillow")
 
     clear_stage(out_dir)
-    bright = brightness_series(rows)
+    bright = bright_values if bright_values is not None else brightness_series(rows)
     n = len(rows); safe = _safe_rect(cfg, width, height); sl, st, sr, sb = safe
     graph = _graph_rect(cfg, safe, width, height, kind)
     stroke = max(1, int(round(height * cfg.TEXT_STROKE_WIDTH)))
@@ -324,6 +369,8 @@ def make_overlay_frames(kind: str, rows: list[dict], expected: list[ExpectedFram
     # Precompute coordinates for speed.
     xs = [px0 + (px1-px0) * (i / max(1, n-1)) for i in range(n)]
     ys = [py1 - (py1-py0) * ((max(cfg.GRAPH_Y_MIN, min(cfg.GRAPH_Y_MAX, v))-cfg.GRAPH_Y_MIN)/yrange) for v in bright]
+    run_date = date_label(rows)
+    axis_font = f_small
 
     for i, (row, exp) in enumerate(zip(rows, expected)):
         im = Image.new("RGBA", (width, height), (0,0,0,0)); d = ImageDraw.Draw(im, "RGBA")
@@ -336,6 +383,17 @@ def make_overlay_frames(kind: str, rows: list[dict], expected: list[ExpectedFram
             d.line((px0, yy, px1, yy), fill=(255,255,255,int(cfg.GRAPH_GRID_ALPHA)), width=grid_w)
         d.line((px0, py0, px0, py1), fill=(255,255,255,int(cfg.GRAPH_AXIS_ALPHA)), width=axis_w)
         d.line((px0, py1, px1, py1), fill=(255,255,255,int(cfg.GRAPH_AXIS_ALPHA)), width=axis_w)
+        if getattr(cfg, "GRAPH_SHOW_AXIS_LABELS", True):
+            y_min = f"{cfg.GRAPH_Y_MIN:g}"
+            y_mid = f"{(cfg.GRAPH_Y_MIN + cfg.GRAPH_Y_MAX) / 2:g}"
+            y_max = f"{cfg.GRAPH_Y_MAX:g}"
+            txt(d, (gx0+int(width*0.004), py1), y_min, axis_font, anchor="ls")
+            txt(d, (gx0+int(width*0.004), (py0+py1)/2), y_mid, axis_font, anchor="lm")
+            txt(d, (gx0+int(width*0.004), py0), y_max, axis_font, anchor="la")
+            txt(d, (px0, gy1-int(height*0.005)), clock_label(rows[0]), axis_font, anchor="ls")
+            txt(d, (px1, gy1-int(height*0.005)), clock_label(rows[-1]), axis_font, anchor="rs")
+            unit = getattr(cfg, "GRAPH_Y_AXIS_LABEL", "Brightness (linear median, 0-1)")
+            txt(d, (px0, gy0+int(height*0.024)), unit, axis_font, anchor="ls")
 
         upto = i+1 if cfg.GRAPH_REVEAL_LIVE else n
         if upto >= 2:
@@ -347,7 +405,11 @@ def make_overlay_frames(kind: str, rows: list[dict], expected: list[ExpectedFram
 
         title_y = gy0 + int(height*0.006)
         if kind == "brightness":
-            if cfg.BRIGHTNESS_SHOW_TITLE: txt(d, (gx0+pad_l, title_y), cfg.BRIGHTNESS_TITLE, f_title)
+            if cfg.BRIGHTNESS_SHOW_TITLE:
+                title = cfg.BRIGHTNESS_TITLE
+                if run_date and getattr(cfg, "OVERLAY_SHOW_DATE", True):
+                    title = f"{title}  {run_date}"
+                txt(d, (gx0+pad_l, title_y), title, f_title)
             if cfg.BRIGHTNESS_SHOW_CURRENT_VALUE:
                 txt(d, (gx1-pad_r, title_y), f"{bright[i]:.3f}", f_title, anchor="ra")
             meta = []
@@ -372,7 +434,10 @@ def make_overlay_frames(kind: str, rows: list[dict], expected: list[ExpectedFram
             # No separate SCENE row: the live brightness chart carries scene telemetry.
             if cfg.DIRECTOR_SHOW_BRIGHTNESS_GRAPH:
                 # Match the brightness-only chart header exactly: title left, number right.
-                txt(d, (gx0+pad_l, title_y), cfg.BRIGHTNESS_TITLE, f_title)
+                title = cfg.BRIGHTNESS_TITLE
+                if run_date and getattr(cfg, "OVERLAY_SHOW_DATE", True):
+                    title = f"{title}  {run_date}"
+                txt(d, (gx0+pad_l, title_y), title, f_title)
                 if cfg.DIRECTOR_SHOW_CURRENT_BRIGHTNESS:
                     txt(d, (gx1-pad_r, title_y), f"{bright[i]:.3f}", f_title, anchor="ra")
 
@@ -430,6 +495,11 @@ def main() -> int:
     p.add_argument("--framing", choices=["crop","contain"]); p.add_argument("--crf", type=int)
     p.add_argument("--preset", choices=["ultrafast","superfast","veryfast","faster","fast","medium","slow","slower","veryslow"])
     p.add_argument("--output-dir", type=Path, default=None)
+    p.add_argument("--output-stem-suffix", default="", help="Suffix appended to output filename stem before profile/kind")
+    p.add_argument("--brightness-source", choices=["telemetry","frames"], default="telemetry",
+                   help="Use telemetry brightness or measure brightness from the source frames")
+    p.add_argument("--brightness-analysis-max-edge", type=int, default=512,
+                   help="Long-edge size for per-frame brightness analysis")
     p.add_argument("--overwrite", action="store_true"); p.add_argument("--keep-stage", action="store_true"); p.add_argument("--dry-run", action="store_true")
     args = p.parse_args()
 
@@ -463,26 +533,34 @@ def main() -> int:
 
     out_dir = (args.output_dir.expanduser().resolve() if args.output_dir else run_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    planned = {kind: out_dir / f"{run_dir.name}_{args.profile}_{kind}.mp4" for kind in outputs}
+    planned = {kind: out_dir / f"{run_dir.name}{args.output_stem_suffix}_{args.profile}_{kind}.mp4" for kind in outputs}
     collisions = [p for p in planned.values() if p.exists()]
     if collisions and not args.overwrite:
         raise SystemExit("Output exists; use --overwrite:\n" + "\n".join(str(x) for x in collisions))
 
     if args.dry_run:
         # Also validate brightness if an overlay output was requested.
-        if any(x in outputs for x in ("brightness","director")): brightness_series(telemetry_rows)
+        if any(x in outputs for x in ("brightness","director")):
+            if args.brightness_source == "frames":
+                brightness_series_from_sources(manifest, max_edge=args.brightness_analysis_max_edge)
+            else:
+                brightness_series(telemetry_rows)
         print(f"DRY RUN COMPLETE: frame mapping and requested overlay telemetry validated. Exposure metadata: {exposure_metadata_source}.")
         if not args.keep_stage: shutil.rmtree(stage)
         return 0
     if shutil.which("ffmpeg") is None: raise SystemExit("ffmpeg not found. Install with: sudo apt install ffmpeg")
 
     results = []
+    bright_values = None
+    if args.brightness_source == "frames" and any(x in outputs for x in ("brightness","director")):
+        print("\nMeasuring brightness from rendered source frames...")
+        bright_values = brightness_series_from_sources(manifest, max_edge=args.brightness_analysis_max_edge)
     for kind in outputs:
         ov_dir = None
         if kind in ("brightness","director"):
             ov_dir = run_dir / f"_overlay_stage_{kind}"
             print(f"\nGenerating {kind} overlay frames...")
-            make_overlay_frames(kind, telemetry_rows, expected, cfg["width"], cfg["height"], overlay_cfg, ov_dir)
+            make_overlay_frames(kind, telemetry_rows, expected, cfg["width"], cfg["height"], overlay_cfg, ov_dir, bright_values)
         print(f"\nRendering {kind}: {planned[kind].name}")
         rc, elapsed = run_ffmpeg(stage, ov_dir, expected[0].frame, cfg, planned[kind], args.overwrite)
         results.append({"kind":kind,"output":str(planned[kind]),"returncode":rc,"render_seconds":elapsed})
@@ -496,6 +574,7 @@ def main() -> int:
         "frames":len(expected), "fps":cfg["fps"], "width":cfg["width"], "height":cfg["height"],
         "framing":cfg["framing"], "preset":cfg["preset"], "crf":cfg["crf"], "outputs":results,
         "overlay_config":str(args.overlay_config.expanduser().resolve()),
+        "brightness_source": args.brightness_source,
         "exposure_metadata_source": exposure_metadata_source,
         "status":"complete" if results and all(r["returncode"]==0 for r in results) and len(results)==len(outputs) else "failed",
     }

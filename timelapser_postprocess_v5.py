@@ -3,9 +3,10 @@
 
 Runs only after capture has stopped:
 1. recover full-resolution JPEGs from the camera SD card
-2. render the clean/brightness/director videos from those full JPEGs
-3. prepare the clean Reel in an Instagram queue
-4. optionally copy the videos to Roy's Mac
+2. smooth the downloaded JPEG sequence for final video output
+3. render the clean/brightness/director videos from the smoothed JPEGs
+4. prepare the final clean Reel in an Instagram queue
+5. optionally copy the videos to Roy's Mac
 """
 
 from __future__ import annotations
@@ -24,6 +25,19 @@ DEFAULT_MAC_VIDEO_DEST = (
     "roy@192.168.100.191:/Users/roy/Documents/ChatGPT/Timelapser/rendered_videos"
 )
 DEFAULT_TIMELAPSER_PYTHON = "/home/roy/timelapser-venv/bin/python3"
+SMOOTHED_FRAME_DIRNAME = "frames_smoothed_luma_v2"
+SMOOTHING_ARGS = [
+    "--window",
+    "61",
+    "--passes",
+    "3",
+    "--strength",
+    "1.0",
+    "--max-stops",
+    "0.25",
+    "--output-max-edge",
+    "2400",
+]
 
 
 def _print_stdout(message: str) -> None:
@@ -143,13 +157,15 @@ def _copy_videos_to_mac(log_path: Path, run_dir: Path, dest: str, cwd: Path) -> 
     return result
 
 
-def _queue_instagram_reel(log_path: Path, run_dir: Path, cwd: Path, python: str) -> dict:
+def _queue_instagram_reel(log_path: Path, run_dir: Path, cwd: Path, python: str, video: Path | None = None) -> dict:
     cmd = [
         python,
         str(cwd / "instagram_queue.py"),
         str(run_dir),
         "--force",
     ]
+    if video is not None:
+        cmd.extend(["--video", str(video)])
     return _run_step(log_path, "queue_instagram_reel", cmd, cwd)
 
 
@@ -157,6 +173,7 @@ def run_postprocess(
     run_dir: Path,
     *,
     download_fullres: bool,
+    smooth_exposure: bool,
     render: bool,
     queue_instagram: bool = True,
     copy_videos_to_mac: bool,
@@ -173,6 +190,7 @@ def run_postprocess(
         "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "run_dir": str(run_dir),
         "download_fullres": bool(download_fullres),
+        "smooth_exposure": bool(smooth_exposure),
         "render": bool(render),
         "queue_instagram": bool(queue_instagram),
         "copy_videos_to_mac": bool(copy_videos_to_mac),
@@ -211,7 +229,31 @@ def run_postprocess(
                 return summary
 
         if render:
-            source = run_dir / "frames_full_jpeg"
+            fullres_source = run_dir / "frames_full_jpeg"
+            smoothed_source = run_dir / SMOOTHED_FRAME_DIRNAME
+
+            if smooth_exposure:
+                step = _run_step(
+                    log_path,
+                    "smooth_exposure_v2",
+                    [
+                        python,
+                        str(root / "smooth_exposure.py"),
+                        str(fullres_source),
+                        "--output",
+                        str(smoothed_source),
+                        "--apply",
+                        "--overwrite",
+                        *SMOOTHING_ARGS,
+                    ],
+                    root,
+                )
+                summary["steps"].append(step)
+                if step["returncode"] != 0:
+                    summary["status"] = "failed_smooth_exposure"
+                    return summary
+
+            source = smoothed_source if smooth_exposure else fullres_source
             step = _run_step(
                 log_path,
                 "render_videos",
@@ -221,6 +263,10 @@ def run_postprocess(
                     str(run_dir),
                     "--source",
                     str(source),
+                    "--output-stem-suffix",
+                    "_final",
+                    "--brightness-source",
+                    "frames",
                     "--overwrite",
                 ],
                 root,
@@ -231,7 +277,14 @@ def run_postprocess(
                 return summary
 
         if queue_instagram:
-            step = _queue_instagram_reel(log_path, run_dir, root, python)
+            final_reel = run_dir / f"{run_dir.name}_final_instagram-reel_clean.mp4"
+            step = _queue_instagram_reel(
+                log_path,
+                run_dir,
+                root,
+                python,
+                video=final_reel if final_reel.exists() else None,
+            )
             summary["steps"].append(step)
             if step["returncode"] != 0:
                 summary["status"] = "failed_queue_instagram"
@@ -261,6 +314,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run Timelapser V5 post-run workflow.")
     parser.add_argument("run_dir", type=Path)
     parser.add_argument("--skip-download-fullres", action="store_true")
+    parser.add_argument("--skip-smoothing", action="store_true")
     parser.add_argument("--skip-render", action="store_true")
     parser.add_argument("--skip-instagram-queue", action="store_true")
     parser.add_argument("--skip-copy-videos-to-mac", action="store_true")
@@ -270,6 +324,7 @@ def main() -> int:
     summary = run_postprocess(
         args.run_dir,
         download_fullres=not args.skip_download_fullres,
+        smooth_exposure=not args.skip_smoothing,
         render=not args.skip_render,
         queue_instagram=not args.skip_instagram_queue,
         copy_videos_to_mac=not args.skip_copy_videos_to_mac,

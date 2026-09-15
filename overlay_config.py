@@ -86,6 +86,14 @@ GRAPH_REVEAL_LIVE = True
 # Number of horizontal guide lines, including min/max. 5 gives 0, .25, .5, .75, 1.
 GRAPH_HORIZONTAL_GUIDES = 5
 
+# Show basic axis labels on brightness graphs. Brightness is unitless linear
+# median luminance measured from the JPEG frames being rendered.
+GRAPH_SHOW_AXIS_LABELS = True
+GRAPH_Y_AXIS_LABEL = "Brightness (linear median, 0-1)"
+
+# Date label rendered as e.g. "12 Jan 2026".
+OVERLAY_SHOW_DATE = True
+
 # -----------------------------------------------------------------------------
 # BRIGHTNESS-ONLY VIDEO
 # -----------------------------------------------------------------------------

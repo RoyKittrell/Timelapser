@@ -17,7 +17,7 @@ V5 currently supports:
 - A Streamlit AI Director dashboard for live telemetry, recent frames, run status, storage checks and operator commands.
 - Thumbnail-based in-run analysis to protect short capture intervals.
 - Post-run full-resolution JPEG recovery from the camera SD card.
-- Post-run video rendering, including clean, brightness-overlay and Director-overlay versions.
+- Post-run V2 exposure smoothing and video rendering, including clean, brightness-overlay and Director-overlay versions.
 - An aperture-priority observer mode for testing whether the camera body can ramp exposure more smoothly than scripted full-manual control.
 - Early V6 beta experiments around USB storage import. V6 is not the production path yet.
 
@@ -51,7 +51,7 @@ The main capture flow is:
 7. The AI Commander reviews telemetry and image context asynchronously.
 8. Deterministic guardrails decide whether any exposure change is allowed.
 9. Telemetry, camera commands, AI decisions, events and errors are written to disk.
-10. After a clean finish, optional post-processing downloads full JPEGs and renders videos.
+10. After a clean finish, optional post-processing downloads full JPEGs, creates a smoothed V2 frame sequence and renders videos.
 
 Important files:
 
@@ -136,9 +136,15 @@ The chat/operator interface can answer basic run/scheduler questions and can sta
 After a clean scheduled run, the current default workflow is:
 
 1. Download full-resolution JPEGs using `download_run_fullres.py`.
-2. Render videos from `frames_full_jpeg/` using `render_timelapse.py`.
-3. Prepare the clean Reel in `instagram_queue/ready/` with caption and metadata.
-4. Attempt to copy rendered videos to the configured Mac destination, if enabled.
+2. Create V2-smoothed JPEGs in `frames_smoothed_luma_v2/` using `smooth_exposure.py`.
+3. Render `_final_...` videos from the smoothed frames using `render_timelapse.py`.
+4. Build brightness and Director overlays from brightness measured on the final smoothed frames.
+5. Prepare the final clean Reel in `instagram_queue/ready/` with caption and metadata.
+6. Attempt to copy rendered videos to the configured Mac destination, if enabled.
+
+Brightness-overlay graphs label the x-axis with 24-hour clock time and the
+y-axis as `Brightness (linear median, 0-1)`. Overlay videos include the capture
+date in the form `12 Jan 2026`.
 
 The Mac copy step requires SSH from the Pi to the Mac. If macOS Remote Login is disabled, the render still completes on the Pi and the copy failure is recorded in the postprocess log.
 
