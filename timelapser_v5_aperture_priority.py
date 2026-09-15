@@ -1152,6 +1152,7 @@ def main():
             post_summary = run_postprocess(
                 run_dir,
                 download_fullres=args.post_download_fullres,
+                smooth_exposure=args.post_render,
                 render=args.post_render,
                 copy_videos_to_mac=args.post_copy_videos_to_mac,
                 mac_video_dest=args.post_mac_video_dest,
