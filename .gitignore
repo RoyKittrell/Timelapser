@@ -16,6 +16,7 @@ env/
 scheduler_state.json
 control/
 director_test_shots/
+instagram_queue/
 
 # Timelapse run folders and rendered/transferred media
 20[0-9][0-9][0-9][0-9][0-9][0-9]_*/

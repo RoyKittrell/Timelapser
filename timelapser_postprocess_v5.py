@@ -4,7 +4,8 @@
 Runs only after capture has stopped:
 1. recover full-resolution JPEGs from the camera SD card
 2. render the clean/brightness/director videos from those full JPEGs
-3. optionally copy the videos to Roy's Mac
+3. prepare the clean Reel in an Instagram queue
+4. optionally copy the videos to Roy's Mac
 """
 
 from __future__ import annotations
@@ -142,11 +143,22 @@ def _copy_videos_to_mac(log_path: Path, run_dir: Path, dest: str, cwd: Path) -> 
     return result
 
 
+def _queue_instagram_reel(log_path: Path, run_dir: Path, cwd: Path, python: str) -> dict:
+    cmd = [
+        python,
+        str(cwd / "instagram_queue.py"),
+        str(run_dir),
+        "--force",
+    ]
+    return _run_step(log_path, "queue_instagram_reel", cmd, cwd)
+
+
 def run_postprocess(
     run_dir: Path,
     *,
     download_fullres: bool,
     render: bool,
+    queue_instagram: bool = True,
     copy_videos_to_mac: bool,
     mac_video_dest: str | None = None,
 ) -> dict:
@@ -162,6 +174,7 @@ def run_postprocess(
         "run_dir": str(run_dir),
         "download_fullres": bool(download_fullres),
         "render": bool(render),
+        "queue_instagram": bool(queue_instagram),
         "copy_videos_to_mac": bool(copy_videos_to_mac),
         "mac_video_dest": dest,
         "steps": [],
@@ -217,6 +230,13 @@ def run_postprocess(
                 summary["status"] = "failed_render"
                 return summary
 
+        if queue_instagram:
+            step = _queue_instagram_reel(log_path, run_dir, root, python)
+            summary["steps"].append(step)
+            if step["returncode"] != 0:
+                summary["status"] = "failed_queue_instagram"
+                return summary
+
         if copy_videos_to_mac:
             step = _copy_videos_to_mac(log_path, run_dir, dest, root)
             summary["steps"].append(step)
@@ -242,6 +262,7 @@ def main() -> int:
     parser.add_argument("run_dir", type=Path)
     parser.add_argument("--skip-download-fullres", action="store_true")
     parser.add_argument("--skip-render", action="store_true")
+    parser.add_argument("--skip-instagram-queue", action="store_true")
     parser.add_argument("--skip-copy-videos-to-mac", action="store_true")
     parser.add_argument("--mac-video-dest", default=None)
     args = parser.parse_args()
@@ -250,6 +271,7 @@ def main() -> int:
         args.run_dir,
         download_fullres=not args.skip_download_fullres,
         render=not args.skip_render,
+        queue_instagram=not args.skip_instagram_queue,
         copy_videos_to_mac=not args.skip_copy_videos_to_mac,
         mac_video_dest=args.mac_video_dest,
     )

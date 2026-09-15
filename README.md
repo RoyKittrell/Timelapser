@@ -137,7 +137,8 @@ After a clean scheduled run, the current default workflow is:
 
 1. Download full-resolution JPEGs using `download_run_fullres.py`.
 2. Render videos from `frames_full_jpeg/` using `render_timelapse.py`.
-3. Attempt to copy rendered videos to the configured Mac destination.
+3. Prepare the clean Reel in `instagram_queue/ready/` with caption and metadata.
+4. Attempt to copy rendered videos to the configured Mac destination, if enabled.
 
 The Mac copy step requires SSH from the Pi to the Mac. If macOS Remote Login is disabled, the render still completes on the Pi and the copy failure is recorded in the postprocess log.
 
@@ -148,6 +149,40 @@ cd "/home/roy/Timelapser Sept2026/timelapser_v5"
 source /home/roy/timelapser-venv/bin/activate
 python3 timelapser_postprocess_v5.py "/path/to/run_folder"
 ```
+
+## Instagram Publishing Scaffold
+
+Instagram publishing is staged but not fully automatic until Meta and Dropbox
+credentials are configured in the private environment file.
+
+Prepare the clean Reel for posting:
+
+```bash
+python3 instagram_queue.py "/path/to/run_folder"
+```
+
+This creates a generated queue item below `instagram_queue/ready/` containing:
+
+- clean Instagram Reel MP4
+- `caption.txt`
+- `metadata.json`
+- `publish_status.json`
+
+Check whether the private publishing credentials are available:
+
+```bash
+python3 instagram_publish.py --check-auth
+```
+
+Dry-run a queued item without uploading or publishing:
+
+```bash
+python3 instagram_publish.py instagram_queue/ready/RUN_FOLDER --dry-run
+```
+
+The live publishing flow will upload the Reel to Dropbox for a temporary public
+URL, create an Instagram Reel media container, poll it until ready, and publish
+only when explicitly run with `--publish`.
 
 ## Development Workflow
 
