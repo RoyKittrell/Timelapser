@@ -736,6 +736,12 @@ def fullres_download_status(run_dir: Path, df: pd.DataFrame) -> dict[str, Any] |
     log_path = run_dir / 'fullres_download.log'
     summary = read_json(run_dir / 'fullres_download_summary.json')
     downloaded = count_jpegs(full_dir)
+    log_tail = tail_text(log_path, 20000)
+    failed_lines = [
+        line for line in log_tail.splitlines()
+        if 'FAILED frame' in line or 'FATAL' in line or 'Traceback' in line
+    ]
+    last_failure = failed_lines[-1] if failed_lines else ''
 
     total = 0
     if not df.empty and 'frame' in df.columns:
@@ -755,6 +761,8 @@ def fullres_download_status(run_dir: Path, df: pd.DataFrame) -> dict[str, Any] |
     complete = bool(total and downloaded >= total)
     state = 'complete' if complete else 'active' if active else 'not running'
     pct = (downloaded / total) if total else 0.0
+    retrieval_error = bool(failed_lines and not complete)
+    incomplete_stopped = bool(total and downloaded < total and log_path.exists() and not active)
 
     first_file, last_file = _file_time_bounds(full_dir)
     now = datetime.now().astimezone()
@@ -782,6 +790,10 @@ def fullres_download_status(run_dir: Path, df: pd.DataFrame) -> dict[str, Any] |
         'eta_s': eta_s,
         'finish_at': finish_at,
         'log_path': str(log_path) if log_path.exists() else '',
+        'failed_attempts_recent': len(failed_lines),
+        'last_failure': last_failure,
+        'retrieval_error': retrieval_error,
+        'incomplete_stopped': incomplete_stopped,
     }
 
 
@@ -797,14 +809,22 @@ def render_fullres_download_status(run_dir: Path, df: pd.DataFrame) -> None:
     count_label = f'{downloaded}/{total}' if total else f'{downloaded}'
 
     st.markdown('### Full JPEG download')
-    cols = st.columns(4)
+    cols = st.columns(5)
     cols[0].metric('Status', str(status['state']).title())
     cols[1].metric('Progress', count_label)
     cols[2].metric('Complete', pct_label)
+    failed = int(status.get('failed_attempts_recent') or 0)
+    cols[3].metric('Retrieval errors', failed)
     eta_s = status.get('eta_s')
-    cols[3].metric('ETA', format_countdown(float(eta_s)) if eta_s is not None else '—')
+    cols[4].metric('ETA', format_countdown(float(eta_s)) if eta_s is not None else '—')
     if total:
         st.progress(min(1.0, max(0.0, pct)))
+
+    if status.get('retrieval_error'):
+        last_failure = str(status.get('last_failure') or 'Recent full-JPEG retrieval failed.')
+        st.warning(f'Image retrieval error: {last_failure}')
+    elif status.get('incomplete_stopped'):
+        st.warning('Full-JPEG retrieval is incomplete and no downloader is currently running.')
 
     detail = []
     elapsed_s = status.get('elapsed_s')
