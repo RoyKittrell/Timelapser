@@ -17,6 +17,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from post_metadata import write_post_files
+
 
 DEFAULT_QUEUE_DIR = Path("instagram_queue") / "ready"
 
@@ -84,6 +86,10 @@ def format_clock(iso_text: str | None) -> str:
 def build_caption(run_dir: Path, metadata: dict[str, Any], custom_caption: str | None = None) -> str:
     if custom_caption:
         return custom_caption.strip()
+
+    post_caption = str(metadata.get("post_caption") or "").strip()
+    if post_caption:
+        return post_caption
 
     mode = str(metadata.get("mode") or "timelapse")
     frames = metadata.get("frames")
@@ -174,6 +180,7 @@ def prepare_queue_item(
     render_summary = read_json(run_dir / "render_summary_v3.json")
     telemetry = read_telemetry_summary(run_dir)
     mode = run_mode(run_dir, run_summary)
+    post_metadata = write_post_files(run_dir)
 
     item_dir = queue_dir.expanduser().resolve() / safe_name(run_dir.name)
     item_dir.mkdir(parents=True, exist_ok=True)
@@ -195,6 +202,9 @@ def prepare_queue_item(
         "ended_at": telemetry.get("ended_at"),
         "run_summary": run_summary,
         "render_summary": render_summary,
+        "post_metadata": post_metadata,
+        "post_title": post_metadata.get("title"),
+        "post_caption": post_metadata.get("caption"),
         "video_probe": ffprobe_video(dest_video),
     }
     caption_text = build_caption(run_dir, metadata, caption)

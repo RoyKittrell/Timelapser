@@ -2,3 +2,4 @@ olympuswifi
 openai
 numpy
 opencv-python
+astral
