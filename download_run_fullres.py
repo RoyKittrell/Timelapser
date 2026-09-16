@@ -56,6 +56,7 @@ from pathlib import Path
 from typing import Optional
 
 try:
+    import olympuswifi.camera as olympuswifi_camera
     from olympuswifi.camera import OlympusCamera
 except Exception as exc:
     raise SystemExit(
@@ -70,6 +71,7 @@ DEFAULT_OUTPUT_DIRNAME = "frames_full_jpeg"
 # A real E-M1/E-M5 full JPEG can be many MB.  This is deliberately low enough
 # not to reject unusually small but valid images while still catching nonsense.
 MIN_REASONABLE_JPEG_BYTES = 50_000
+OLYMPUS_CGI_TIMEOUT_SECONDS = 8.0
 
 MANIFEST_FIELDS = [
     "frame",
@@ -82,6 +84,33 @@ MANIFEST_FIELDS = [
     "last_error",
     "verified_at",
 ]
+
+
+class _TimedRequests:
+    """Add default request timeouts to olympuswifi for post-run downloads."""
+
+    def __init__(self, wrapped):
+        self._wrapped = wrapped
+
+    def __getattr__(self, name):
+        return getattr(self._wrapped, name)
+
+    def get(self, url, *args, **kwargs):
+        kwargs.setdefault("timeout", OLYMPUS_CGI_TIMEOUT_SECONDS)
+        return self._wrapped.get(url, *args, **kwargs)
+
+    def post(self, url, *args, **kwargs):
+        kwargs.setdefault("timeout", OLYMPUS_CGI_TIMEOUT_SECONDS)
+        return self._wrapped.post(url, *args, **kwargs)
+
+
+def _install_olympus_timeouts():
+    requests_obj = olympuswifi_camera.requests
+    if not isinstance(requests_obj, _TimedRequests):
+        olympuswifi_camera.requests = _TimedRequests(requests_obj)
+
+
+_install_olympus_timeouts()
 
 
 @dataclass(frozen=True)
@@ -451,7 +480,29 @@ def main() -> int:
             )
 
     session = OlympusDownloadSession(log, args.operation_timeout)
-    session.connect()
+
+    def connect_with_retries(reason: str):
+        last_error: Exception | None = None
+        for attempt in range(1, args.attempts_per_frame + 1):
+            try:
+                log.write(
+                    f"{reason}: opening Olympus session "
+                    f"(attempt {attempt}/{args.attempts_per_frame})"
+                )
+                session.connect()
+                return
+            except Exception as exc:
+                last_error = exc
+                log.write(
+                    f"{reason}: session open failed: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                if attempt < args.attempts_per_frame:
+                    time.sleep(backoff_seconds(attempt, args.retry_delay))
+        assert last_error is not None
+        raise last_error
+
+    connect_with_retries("initial connect")
 
     sd_names: set[str] | None = None
     missing_on_sd: list[ExpectedFrame] = []
