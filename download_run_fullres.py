@@ -49,6 +49,8 @@ import os
 import signal
 import sys
 import time
+import urllib.parse
+import urllib.request
 from contextlib import contextmanager
 from dataclasses import dataclass, asdict
 from datetime import datetime
@@ -202,6 +204,41 @@ class OlympusDownloadSession:
                 f"download_image({remote_jpg!r}) returned {type(data).__name__}, not bytes"
             )
         return bytes(data)
+
+
+class DirectHttpDownloadSession:
+    """Direct file downloader for exact /DCIM paths recorded in telemetry.
+
+    This bypasses olympuswifi's command discovery/probing path, which can wedge
+    even when the camera is willing to serve static JPEG URLs.
+    """
+
+    def __init__(self, log: Log, op_timeout: float, base_url: str):
+        self.log = log
+        self.op_timeout = op_timeout
+        self.base_url = base_url.rstrip("/")
+
+    def connect(self):
+        self.log.write("Using direct HTTP image downloads; skipping Olympus command session.")
+
+    def close(self):
+        pass
+
+    def reset(self, reason: str, delay: float):
+        self.log.write(f"Direct HTTP retry delay after {reason}.")
+        if delay > 0:
+            time.sleep(delay)
+
+    def list_images(self):
+        raise RuntimeError("SD inventory is not available in direct HTTP mode")
+
+    def download(self, remote_jpg: str) -> bytes:
+        quoted = urllib.parse.quote(remote_jpg.lstrip("/"), safe="/")
+        url = f"{self.base_url}/{quoted}"
+        req = urllib.request.Request(url, headers={"User-Agent": "OlympusCameraKit"})
+        with hard_timeout(self.op_timeout):
+            with urllib.request.urlopen(req, timeout=self.op_timeout) as resp:
+                return resp.read()
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -415,6 +452,10 @@ def main() -> int:
     parser.add_argument("--inventory-timeout", type=float, default=180.0)
     parser.add_argument("--skip-inventory", action="store_true",
                         help="Skip SD inventory check and try exact telemetry paths directly")
+    parser.add_argument("--direct-http", action="store_true",
+                        help="Download exact telemetry JPEG URLs without initializing olympuswifi commands")
+    parser.add_argument("--camera-base-url", default="http://192.168.0.10",
+                        help="Camera HTTP base URL used by --direct-http")
     parser.add_argument("--accept-valid-existing", action="store_true",
                         help="Trust valid pre-existing JPEGs even when no manifest hash exists")
     parser.add_argument("--force-redownload", action="store_true")
@@ -479,7 +520,11 @@ def main() -> int:
                 f"{old['remote_jpg']}, telemetry maps to {item.remote_jpg}."
             )
 
-    session = OlympusDownloadSession(log, args.operation_timeout)
+    if args.direct_http:
+        args.skip_inventory = True
+        session = DirectHttpDownloadSession(log, args.operation_timeout, args.camera_base_url)
+    else:
+        session = OlympusDownloadSession(log, args.operation_timeout)
 
     def connect_with_retries(reason: str):
         last_error: Exception | None = None
