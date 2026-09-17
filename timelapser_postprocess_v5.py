@@ -63,14 +63,19 @@ def _run_step(log_path: Path, name: str, cmd: list[str], cwd: Path) -> dict:
     _log(log_path, f"START {name}: " + " ".join(shlex.quote(x) for x in cmd))
     with log_path.open("a", encoding="utf-8") as f:
         f.write("\n" + "=" * 72 + f"\n{name}\n" + "=" * 72 + "\n")
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
             cwd=str(cwd),
-            stdout=f,
+            stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            check=False,
         )
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            f.write(line)
+            f.flush()
+            _print_stdout(line.rstrip())
+        proc.wait()
     elapsed = time.monotonic() - started
     _log(log_path, f"END {name}: returncode={proc.returncode} elapsed={elapsed:.1f}s")
     return {
