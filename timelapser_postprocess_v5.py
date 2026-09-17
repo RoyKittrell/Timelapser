@@ -14,12 +14,15 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import time
 import argparse
 from datetime import datetime
 from pathlib import Path
+
+from PIL import Image
 
 DEFAULT_MAC_VIDEO_DEST = (
     "roy@192.168.100.191:/Users/roy/Documents/ChatGPT/Timelapser/rendered_videos"
@@ -56,6 +59,53 @@ def _log(log_path: Path, message: str) -> None:
     with log_path.open("a", encoding="utf-8") as f:
         f.write(line + "\n")
     _print_stdout(line)
+
+
+def _record_error(run_dir: Path, where: str, **details) -> None:
+    record = {
+        "time": datetime.now().astimezone().isoformat(timespec="milliseconds"),
+        "where": where,
+        **details,
+    }
+    with (run_dir / "errors.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, default=str) + "\n")
+
+
+def _repair_unreadable_frames(run_dir: Path, frames_dir: Path, log_path: Path) -> dict:
+    frames = sorted(frames_dir.glob("frame_*.jpg"))
+    valid = []
+    damaged = []
+    for index, path in enumerate(frames):
+        try:
+            with Image.open(path) as image:
+                image.load()
+        except (OSError, ValueError) as exc:
+            damaged.append((index, path, exc))
+        else:
+            valid.append(index)
+
+    if damaged and not valid:
+        raise RuntimeError(f"All {len(damaged)} full-resolution JPEGs are unreadable")
+    for index, path, exc in damaged:
+        source_index = min(valid, key=lambda candidate: (abs(candidate - index), candidate))
+        source = frames[source_index]
+        backup = path.with_suffix(".corrupt")
+        if backup.exists():
+            backup = path.with_name(f"{path.stem}.{int(time.time())}.corrupt")
+        path.replace(backup)
+        try:
+            shutil.copy2(source, path)
+        except Exception:
+            backup.replace(path)
+            raise
+        _record_error(
+            run_dir, "postprocess_jpeg_repair", frame=path.name,
+            error_type=type(exc).__name__, error=str(exc),
+            replacement=source.name, preserved_original=backup.name,
+        )
+        _log(log_path, f"Repaired unreadable {path.name} using {source.name}; original: {backup.name}")
+    return {"name": "validate_and_repair_jpegs", "returncode": 0,
+            "checked": len(frames), "repaired": len(damaged)}
 
 
 def _run_step(log_path: Path, name: str, cmd: list[str], cwd: Path) -> dict:
@@ -237,6 +287,12 @@ def run_postprocess(
             fullres_source = run_dir / "frames_full_jpeg"
             smoothed_source = run_dir / SMOOTHED_FRAME_DIRNAME
 
+            step = _repair_unreadable_frames(run_dir, fullres_source, log_path)
+            summary["steps"].append(step)
+            _log(log_path, f"JPEG check: {step['checked']} checked, {step['repaired']} repaired")
+            if step["checked"] < 3:
+                raise RuntimeError(f"Need at least 3 full-resolution JPEGs, found {step['checked']}")
+
             if smooth_exposure:
                 step = _run_step(
                     log_path,
@@ -311,6 +367,12 @@ def run_postprocess(
         return summary
     finally:
         summary["ended_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
+        if summary["status"].startswith("failed"):
+            _record_error(
+                run_dir, "postprocess_workflow", status=summary["status"],
+                error=summary.get("error", "step returned a nonzero exit code"),
+                failed_step=summary["steps"][-1]["name"] if summary["steps"] else None,
+            )
         summary_path.write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
         _log(log_path, f"Postprocess status: {summary['status']}")
 
