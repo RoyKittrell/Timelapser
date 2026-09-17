@@ -22,6 +22,7 @@ import argparse
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 from PIL import Image
 
 DEFAULT_MAC_VIDEO_DEST = (
@@ -73,20 +74,43 @@ def _record_error(run_dir: Path, where: str, **details) -> None:
 
 def _repair_unreadable_frames(run_dir: Path, frames_dir: Path, log_path: Path) -> dict:
     frames = sorted(frames_dir.glob("frame_*.jpg"))
-    valid = []
+    previews = {}
     damaged = []
     for index, path in enumerate(frames):
         try:
             with Image.open(path) as image:
                 image.load()
+                image.thumbnail((96, 160))
+                previews[index] = np.asarray(image.convert("RGB"), dtype=np.float32)
         except (OSError, ValueError) as exc:
-            damaged.append((index, path, exc))
-        else:
-            valid.append(index)
+            damaged.append((index, path, type(exc).__name__, str(exc), None))
+
+    visual_scores = []
+    for index in range(1, len(frames) - 1):
+        if any(neighbor not in previews for neighbor in (index - 1, index, index + 1)):
+            continue
+        previous, current, following = (previews[j] for j in (index - 1, index, index + 1))
+        if previous.shape != current.shape or current.shape != following.shape:
+            continue
+        residual = current - (previous + following) / 2
+        residual -= np.median(residual, axis=(0, 1))
+        score = float(np.mean(np.abs(residual)))
+        neighbor_difference = previous - following
+        neighbor_difference -= np.median(neighbor_difference, axis=(0, 1))
+        baseline = float(np.mean(np.abs(neighbor_difference)))
+        visual_scores.append((index, score, baseline))
+
+    for index, score, baseline in visual_scores:
+        if score >= 8.0 and score >= 4 * max(baseline, 0.5):
+            damaged.append((index, frames[index], "VisualOutlier",
+                            f"temporal residual {score:.2f}, neighbor difference {baseline:.2f}", score))
+
+    damaged_indices = {item[0] for item in damaged}
+    valid = [index for index in previews if index not in damaged_indices]
 
     if damaged and not valid:
-        raise RuntimeError(f"All {len(damaged)} full-resolution JPEGs are unreadable")
-    for index, path, exc in damaged:
+        raise RuntimeError(f"All {len(damaged)} JPEGs in {frames_dir} are unreadable")
+    for index, path, error_type, error, score in damaged:
         source_index = min(valid, key=lambda candidate: (abs(candidate - index), candidate))
         source = frames[source_index]
         backup = path.with_suffix(".corrupt")
@@ -100,7 +124,7 @@ def _repair_unreadable_frames(run_dir: Path, frames_dir: Path, log_path: Path) -
             raise
         _record_error(
             run_dir, "postprocess_jpeg_repair", frame=path.name,
-            error_type=type(exc).__name__, error=str(exc),
+            error_type=error_type, error=error, visual_score=score,
             replacement=source.name, preserved_original=backup.name,
         )
         _log(log_path, f"Repaired unreadable {path.name} using {source.name}; original: {backup.name}")
@@ -315,6 +339,10 @@ def run_postprocess(
                     return summary
 
             source = smoothed_source if smooth_exposure else fullres_source
+            if smooth_exposure:
+                step = _repair_unreadable_frames(run_dir, source, log_path)
+                summary["steps"].append(step)
+                _log(log_path, f"Smoothed JPEG check: {step['checked']} checked, {step['repaired']} repaired")
             step = _run_step(
                 log_path,
                 "render_videos",
