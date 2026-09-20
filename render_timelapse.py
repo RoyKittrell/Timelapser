@@ -219,22 +219,24 @@ def fmt_shutter(seconds: float) -> str:
     return f"1/{denom}s" if denom else f"{seconds:.4f}s"
 
 
-def enrich_rows_with_exif(rows: list[dict], manifest: list[dict]) -> str:
+def enrich_rows_with_exif(rows: list[dict], manifest: list[dict], run_dir: Path) -> str:
     """Prefer actual JPEG EXIF exposure for overlays when full-res files exist."""
-    if not rows or not manifest or shutil.which("exiftool") is None:
+    if not rows or not manifest:
         return "telemetry"
 
     files: list[str] = []
     source_to_frame: dict[str, int] = {}
     for item in manifest:
-        source = str(item.get("source_file") or "")
+        try:
+            frame = int(item["frame"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        full_jpeg = run_dir / "frames_full_jpeg" / f"frame_{frame:06d}.jpg"
+        source = str(full_jpeg if full_jpeg.is_file() else item.get("source_file") or "")
         if not source:
             continue
         files.append(source)
-        try:
-            source_to_frame[source] = int(item["frame"])
-        except (TypeError, ValueError):
-            continue
+        source_to_frame[source] = frame
 
     row_by_frame: dict[int, dict] = {}
     for row in rows:
@@ -243,11 +245,43 @@ def enrich_rows_with_exif(rows: list[dict], manifest: list[dict]) -> str:
         except (TypeError, ValueError):
             continue
 
+    def enrich_with_pillow() -> int:
+        try:
+            from PIL import Image
+        except ImportError:
+            return 0
+        count = 0
+        for source, frame in source_to_frame.items():
+            row = row_by_frame.get(frame)
+            if row is None:
+                continue
+            try:
+                with Image.open(source) as image:
+                    exif = image.getexif().get_ifd(0x8769)
+                exposure = exif.get(33434)
+                aperture = exif.get(33437)
+                iso = exif.get(34855)
+                if iso is not None:
+                    row["actual_iso"] = float(iso)
+                if aperture is not None:
+                    row["actual_aperture"] = float(aperture)
+                if exposure is not None:
+                    row["actual_shutter_seconds"] = float(exposure)
+            except (OSError, TypeError, ValueError, AttributeError):
+                continue
+            if any(k in row for k in ("actual_iso", "actual_aperture", "actual_shutter_seconds")):
+                count += 1
+        return count
+
+    exiftool = shutil.which("exiftool")
+    if exiftool is None:
+        return "exif" if enrich_with_pillow() else "telemetry"
+
     enriched = 0
     batch_size = 200
     for start in range(0, len(files), batch_size):
         cmd = [
-            "exiftool",
+            exiftool,
             "-j",
             "-n",
             "-ExposureTime",
@@ -275,6 +309,8 @@ def enrich_rows_with_exif(rows: list[dict], manifest: list[dict]) -> str:
                 row["actual_shutter_seconds"] = exif["ExposureTime"]
             if any(k in row for k in ("actual_iso", "actual_aperture", "actual_shutter_seconds")):
                 enriched += 1
+    if not enriched:
+        enriched = enrich_with_pillow()
     return "exif" if enriched else "telemetry"
 
 
@@ -603,7 +639,7 @@ def main() -> int:
         for item in missing[:40]: print(f"  frame {item.frame:06d}: {item.basename}")
         return 2
     write_manifest(run_dir / "render_manifest.csv", manifest)
-    exposure_metadata_source = enrich_rows_with_exif(telemetry_rows, manifest)
+    exposure_metadata_source = enrich_rows_with_exif(telemetry_rows, manifest, run_dir)
 
     out_dir = (args.output_dir.expanduser().resolve() if args.output_dir else run_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
