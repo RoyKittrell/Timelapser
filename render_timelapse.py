@@ -28,6 +28,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from v5_overlay_context import run_bounds, solar_markers
+
 DEFAULT_FPS = 30.0
 
 
@@ -407,6 +409,32 @@ def make_overlay_frames(kind: str, rows: list[dict], expected: list[ExpectedFram
     ys = [py1 - (py1-py0) * ((max(cfg.GRAPH_Y_MIN, min(cfg.GRAPH_Y_MAX, v))-cfg.GRAPH_Y_MIN)/yrange) for v in bright]
     run_date = date_label(rows)
     axis_font = f_small
+    start, end = run_bounds(rows)
+    marker_positions = [
+        (round(px0 + (px1-px0) * ((at-start)/(end-start))), icon)
+        for at, icon in solar_markers(rows)
+    ] if end > start else []
+
+    def phase_icon(draw, x, y, icon):
+        unit = max(5, round(width * 0.008))
+        if icon == "golden":
+            gold = (248, 205, 103, 255)
+            draw.ellipse((x-unit, y-unit, x+unit, y+unit), fill=gold, outline="white", width=2)
+            for dx, dy in ((-2, 0), (2, 0), (0, -2), (0, 2), (-1.5, -1.5), (1.5, -1.5), (-1.5, 1.5), (1.5, 1.5)):
+                draw.line((x+dx*unit*.65, y+dy*unit*.65, x+dx*unit, y+dy*unit), fill=gold, width=2)
+        elif icon == "blue":
+            draw.ellipse((x-unit, y-unit, x+unit, y+unit), fill=(168, 217, 255, 255), outline="white", width=2)
+            draw.ellipse((x-unit//3, y-unit-unit//3, x+unit+unit//2, y+unit//2), fill=(55, 65, 69, 255))
+        else:
+            draw.ellipse((x-unit, y-unit, x+unit, y+unit), fill=(0, 0, 0, 255), outline="white", width=2)
+            outer = unit * 0.62
+            inner = outer * 0.42
+            points = []
+            for point in range(10):
+                angle = math.radians(-90 + point * 36)
+                radius = outer if point % 2 == 0 else inner
+                points.append((x + math.cos(angle) * radius, y + math.sin(angle) * radius))
+            draw.polygon(points, fill="white")
 
     for i, (row, exp) in enumerate(zip(rows, expected)):
         im = Image.new("RGBA", (width, height), (0,0,0,0)); d = ImageDraw.Draw(im, "RGBA")
@@ -428,6 +456,10 @@ def make_overlay_frames(kind: str, rows: list[dict], expected: list[ExpectedFram
             txt(d, (gx0+int(width*0.004), py0), y_max, axis_font, anchor="la")
             txt(d, (px0, gy1-int(height*0.005)), clock_label(rows[0]), axis_font, anchor="ls")
             txt(d, (px1, gy1-int(height*0.005)), clock_label(rows[-1]), axis_font, anchor="rs")
+
+        for marker_x, icon in marker_positions:
+            d.line((marker_x, py0, marker_x, py1), fill=(255, 255, 255, 190), width=max(1, round(width*0.0015)))
+            phase_icon(d, marker_x, py0+int(height*0.012), icon)
 
         upto = i+1 if cfg.GRAPH_REVEAL_LIVE else n
         if upto >= 2:
