@@ -228,12 +228,25 @@ def run_preflight(mod, m: Mission) -> tuple[bool, list[str]]:
         ok = False
         notes.append(f"FAIL timelapser script missing: {script}")
 
-    # Disk sanity: require at least 2 GB free in project filesystem.
+    output_mount = Path(getattr(mod, "OUTPUT_MOUNT", ROOT))
+    output_root = Path(getattr(mod, "OUTPUT_ROOT", ROOT))
+    if hasattr(mod, "OUTPUT_MOUNT") and not output_mount.is_mount():
+        ok = False
+        notes.append(f"FAIL external output drive is not mounted: {output_mount}")
+    else:
+        try:
+            output_root.mkdir(parents=True, exist_ok=True)
+            notes.append(f"OK output root: {output_root}")
+        except Exception as exc:
+            ok = False
+            notes.append(f"FAIL output root unavailable: {type(exc).__name__}: {exc}")
+
+    # Disk sanity: require at least 2 GB free on the configured output filesystem.
     try:
-        du = shutil.disk_usage(ROOT)
+        du = shutil.disk_usage(output_root)
         free_gb = du.free / (1024**3)
         if free_gb >= 2:
-            notes.append(f"OK disk free: {free_gb:.1f} GB")
+            notes.append(f"OK output disk free: {free_gb:.1f} GB")
         else:
             ok = False
             notes.append(f"FAIL low disk space: {free_gb:.1f} GB")
@@ -303,6 +316,7 @@ def build_command(mod, m: Mission, now: datetime) -> list[str]:
 
 
 def run_mission(mod, m: Mission, state: dict[str, Any], now: datetime) -> int:
+    mission_started = time.monotonic()
     log(f"MISSION START {m.key} — planned {m.start_dt.isoformat()} -> {m.end_dt.isoformat()}")
     ok, checks = run_preflight(mod, m)
     for line in checks:
@@ -330,10 +344,12 @@ def run_mission(mod, m: Mission, state: dict[str, Any], now: datetime) -> int:
     )
     log("$ " + " ".join(repr(x) if " " in x else x for x in cmd))
 
-    proc = subprocess.Popen(cmd, cwd=str(Path(mod.TIMELAPSER_SCRIPT).parent))
+    output_root = Path(getattr(mod, "OUTPUT_ROOT", Path(mod.TIMELAPSER_SCRIPT).parent))
+    proc = subprocess.Popen(cmd, cwd=str(output_root))
     rc = proc.wait()
 
     ended = datetime.now().astimezone()
+    elapsed_seconds = time.monotonic() - mission_started
     if rc == 0:
         status = "complete"
         retry_count = int(state.get("events", {}).get(m.key, {}).get("retry_count", 0))
@@ -343,6 +359,7 @@ def run_mission(mod, m: Mission, state: dict[str, Any], now: datetime) -> int:
             status=status,
             returncode=rc,
             actual_ended=ended.isoformat(),
+            elapsed_seconds=elapsed_seconds,
             retry_count=retry_count,
             next_retry_at=None,
         )
@@ -359,6 +376,7 @@ def run_mission(mod, m: Mission, state: dict[str, Any], now: datetime) -> int:
                 status=status,
                 returncode=rc,
                 actual_ended=ended.isoformat(),
+                elapsed_seconds=elapsed_seconds,
                 retry_count=retry_count,
                 next_retry_at=next_retry.isoformat(),
             )
@@ -371,10 +389,14 @@ def run_mission(mod, m: Mission, state: dict[str, Any], now: datetime) -> int:
                 status=status,
                 returncode=rc,
                 actual_ended=ended.isoformat(),
+                elapsed_seconds=elapsed_seconds,
                 retry_count=retry_count,
                 next_retry_at=None,
             )
-    log(f"MISSION END {m.key}: returncode={rc} status={status}")
+    log(
+        f"MISSION END {m.key}: returncode={rc} status={status} "
+        f"elapsed={elapsed_seconds:.1f}s"
+    )
 
     return rc
 

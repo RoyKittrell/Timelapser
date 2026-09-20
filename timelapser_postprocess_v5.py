@@ -73,6 +73,7 @@ def _record_error(run_dir: Path, where: str, **details) -> None:
 
 
 def _repair_unreadable_frames(run_dir: Path, frames_dir: Path, log_path: Path) -> dict:
+    started = time.monotonic()
     frames = sorted(frames_dir.glob("frame_*.jpg"))
     previews = {}
     damaged = []
@@ -84,6 +85,12 @@ def _repair_unreadable_frames(run_dir: Path, frames_dir: Path, log_path: Path) -
                 previews[index] = np.asarray(image.convert("RGB"), dtype=np.float32)
         except (OSError, ValueError) as exc:
             damaged.append((index, path, type(exc).__name__, str(exc), None))
+        if (index + 1) % 100 == 0 or index + 1 == len(frames):
+            _log(
+                log_path,
+                f"JPEG validation progress: {index + 1}/{len(frames)} "
+                f"elapsed={time.monotonic() - started:.1f}s",
+            )
 
     visual_scores = []
     for index in range(1, len(frames) - 1):
@@ -128,8 +135,10 @@ def _repair_unreadable_frames(run_dir: Path, frames_dir: Path, log_path: Path) -
             replacement=source.name, preserved_original=backup.name,
         )
         _log(log_path, f"Repaired unreadable {path.name} using {source.name}; original: {backup.name}")
+    elapsed = time.monotonic() - started
     return {"name": "validate_and_repair_jpegs", "returncode": 0,
-            "checked": len(frames), "repaired": len(damaged)}
+            "checked": len(frames), "repaired": len(damaged),
+            "elapsed_seconds": elapsed}
 
 
 def _run_step(log_path: Path, name: str, cmd: list[str], cwd: Path) -> dict:
@@ -258,6 +267,7 @@ def run_postprocess(
     copy_videos_to_mac: bool,
     mac_video_dest: str | None = None,
 ) -> dict:
+    workflow_started = time.monotonic()
     run_dir = Path(run_dir).expanduser().resolve()
     root = Path(__file__).resolve().parent
     log_path = run_dir / "postprocess_workflow.log"
@@ -286,19 +296,11 @@ def run_postprocess(
         if download_fullres:
             step = _run_step(
                 log_path,
-                "download_fullres_jpegs",
+                "import_fullres_jpegs_via_mega4_usb",
                 [
                     python,
-                    str(root / "download_run_fullres.py"),
+                    str(root / "mega4_usb_import.py"),
                     str(run_dir),
-                    "--attempts-per-frame",
-                    "4",
-                    "--repair-passes",
-                    "5",
-                    "--operation-timeout",
-                    "120",
-                    "--reset-session-every",
-                    "50",
                 ],
                 root,
             )
@@ -394,6 +396,7 @@ def run_postprocess(
         _log(log_path, f"FATAL postprocess exception: {summary['error']}")
         return summary
     finally:
+        summary["elapsed_seconds"] = time.monotonic() - workflow_started
         summary["ended_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
         if summary["status"].startswith("failed"):
             _record_error(
@@ -402,7 +405,11 @@ def run_postprocess(
                 failed_step=summary["steps"][-1]["name"] if summary["steps"] else None,
             )
         summary_path.write_text(json.dumps(summary, indent=2, default=str), encoding="utf-8")
-        _log(log_path, f"Postprocess status: {summary['status']}")
+        _log(
+            log_path,
+            f"Postprocess status: {summary['status']} "
+            f"elapsed={summary['elapsed_seconds']:.1f}s",
+        )
 
 
 def main() -> int:

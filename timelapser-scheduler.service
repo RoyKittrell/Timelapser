@@ -6,8 +6,9 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=roy
-WorkingDirectory=/home/roy/Timelapser\x20Sept2026/timelapser_v5
-ExecStart=/home/roy/timelapser-venv/bin/python3 "/home/roy/Timelapser Sept2026/timelapser_v5/timelapser_scheduler.py"
+WorkingDirectory=/home/roy/timelapser_v5_current
+ExecStartPre=/usr/bin/sudo /usr/sbin/uhubctl -l 1-1 -p 4 -a off
+ExecStart=/home/roy/timelapser-venv/bin/python3 /home/roy/timelapser_v5_current/timelapser_scheduler.py
 Restart=on-failure
 RestartSec=15
 

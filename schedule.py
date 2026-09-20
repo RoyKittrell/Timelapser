@@ -34,10 +34,15 @@ MIN_REMAINING_MINUTES_TO_START = 1
 PYTHON = "/home/roy/timelapser-venv/bin/python3"
 TIMELAPSER_SCRIPT = "/home/roy/Timelapser Sept2026/timelapser_v5/timelapser_v5_aperture_priority.py"
 
+# Run data belongs on the external drive. The scheduler refuses to start a
+# mission if this mount is unavailable, preventing accidental writes to SD.
+OUTPUT_MOUNT = "/media/roy/My Passport"
+OUTPUT_ROOT = "/media/roy/My Passport/Timelapser"
+
 # Optional post-run commands. These run only after capture stops cleanly.
 DEFAULT_DOWNLOAD_FULLRES_AFTER = True
 DEFAULT_RENDER_AFTER = True
-DEFAULT_COPY_VIDEOS_TO_MAC_AFTER = False
+DEFAULT_COPY_VIDEOS_TO_MAC_AFTER = True
 DEFAULT_MAC_VIDEO_DEST = "roy@192.168.100.191:/Users/roy/Documents/ChatGPT/Timelapser/rendered_videos"
 
 # Exposure/capture defaults.
