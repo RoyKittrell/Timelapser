@@ -106,18 +106,13 @@ BRIGHTNESS_SHOW_FRAME = False
 # -----------------------------------------------------------------------------
 # AI DIRECTOR VIDEO
 # -----------------------------------------------------------------------------
-DIRECTOR_TITLE = "TIMELAPSER // AI DIRECTOR"
+DIRECTOR_TITLE = "@timelapser.188"
 DIRECTOR_SHOW_FRAME = True
 DIRECTOR_SHOW_TIME = True
 DIRECTOR_SHOW_EXPOSURE = True
 DIRECTOR_SHOW_SCENE_TREND = False
 DIRECTOR_SHOW_BRIGHTNESS_GRAPH = True
 DIRECTOR_SHOW_CURRENT_BRIGHTNESS = True
-
-# Show only camera-setting changes that actually became active in telemetry.
-# Rejected AI proposals never appear.
-DIRECTOR_SHOW_APPLIED_CAMERA_UPDATES = True
-DIRECTOR_UPDATE_HOLD_FRAMES = 18
 
 # Top information block, relative to safe area.
 DIRECTOR_INFO_X = 0.00

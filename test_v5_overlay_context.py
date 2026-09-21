@@ -1,6 +1,11 @@
 import unittest
+import json
+import tempfile
+from io import BytesIO
+from pathlib import Path
+from unittest.mock import patch
 
-from v5_overlay_context import solar_markers
+from v5_overlay_context import air_quality_for_run, solar_markers
 
 
 def rows(start, end):
@@ -17,6 +22,24 @@ class OverlayContextTests(unittest.TestCase):
         self.assertEqual([kind for _, kind in sunrise], ["night", "blue", "golden"])
         self.assertEqual(midday, [])
         self.assertEqual([kind for _, kind in dusk_slice], ["blue", "night"])
+
+    def test_air_quality_is_cached_near_capture_midpoint(self):
+        payload = {"hourly": {"time": ["2026-09-21T18:00", "2026-09-21T19:00", "2026-09-21T20:00"],
+                              "us_aqi": [60, 42, 55]}}
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            with patch("v5_overlay_context.urlopen", return_value=BytesIO(json.dumps(payload).encode())):
+                first = air_quality_for_run(run_dir, rows("2026-09-21T18:24:00", "2026-09-21T20:19:00"))
+            with patch("v5_overlay_context.urlopen", side_effect=OSError("offline")):
+                second = air_quality_for_run(run_dir, rows("2026-09-21T18:24:00", "2026-09-21T20:19:00"))
+            self.assertEqual(first, second)
+            self.assertEqual(first["us_aqi"], 42)
+
+    def test_air_quality_outage_does_not_block_render(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch("v5_overlay_context.urlopen", side_effect=OSError("offline")), \
+                 patch("v5_overlay_context.time.sleep"):
+                self.assertIsNone(air_quality_for_run(Path(temporary), rows("2026-09-21T18:24:00", "2026-09-21T20:19:00")))
 
 
 if __name__ == "__main__":

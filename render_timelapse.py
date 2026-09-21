@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from v5_overlay_context import run_bounds, solar_markers
+from v5_overlay_context import air_quality_for_run, run_bounds, solar_markers
 
 DEFAULT_FPS = 30.0
 
@@ -368,7 +368,7 @@ def _graph_rect(cfg, safe, width, height, kind):
 
 def make_overlay_frames(kind: str, rows: list[dict], expected: list[ExpectedFrame], width: int, height: int,
                         cfg, out_dir: Path, bright_values: list[float] | None = None,
-                        only_frame: int | None = None):
+                        only_frame: int | None = None, air_quality: dict | None = None):
     try:
         from PIL import Image, ImageDraw, ImageFont
     except ImportError:
@@ -526,34 +526,12 @@ def make_overlay_frames(kind: str, rows: list[dict], expected: list[ExpectedFram
                 iso_s = str(int(round(iso))) if math.isfinite(iso) else "—"
                 ap_s = f"ƒ/{ap:g}" if math.isfinite(ap) else "ƒ/—"
                 txt(d, (x,y), f"ISO {iso_s}   {ap_s}   {fmt_shutter(sh)}", f_large); y += int(height*(cfg.TEXT_SIZE_LARGE + cfg.DIRECTOR_LINE_SPACING))
+            if air_quality is not None:
+                txt(d, (x, y + int(height * 0.035)), f"KL  |  AQI {air_quality['us_aqi']}", f_small, anchor="ls")
             # No separate SCENE row: the live brightness chart carries scene telemetry.
             if cfg.DIRECTOR_SHOW_BRIGHTNESS_GRAPH:
                 draw_graph_header(d, True, cfg.DIRECTOR_SHOW_CURRENT_BRIGHTNESS,
                                   f"{bright[i]:.3f}")
-
-            # Camera updates are inferred from settings that actually appear in telemetry.
-            # Therefore rejected AI proposals can never be displayed here.
-            if getattr(cfg, "DIRECTOR_SHOW_APPLIED_CAMERA_UPDATES", True) and i > 0:
-                hold = max(1, int(getattr(cfg, "DIRECTOR_UPDATE_HOLD_FRAMES", 18)))
-                change_i = None
-                for j in range(i, max(0, i-hold), -1):
-                    prev, cur = rows[j-1], rows[j]
-                    keys = ("actual_iso", "actual_aperture", "actual_shutter_seconds")
-                    if not any(k in cur for k in keys):
-                        keys = ("iso", "aperture", "shutter_seconds")
-                    if any(num(prev,k) != num(cur,k) for k in keys):
-                        change_i = j
-                        break
-                if change_i is not None:
-                    cur = rows[change_i]
-                    iso = num(cur, "actual_iso", "iso")
-                    ap = num(cur, "actual_aperture", "aperture")
-                    sh = num(cur, "actual_shutter_seconds", "shutter_seconds")
-                    iso_s = str(int(round(iso))) if math.isfinite(iso) else "—"
-                    ap_s = f"ƒ/{ap:g}" if math.isfinite(ap) else "ƒ/—"
-                    update = f"CAMERA UPDATE  ✓  ISO {iso_s}   {ap_s}   {fmt_shutter(sh)}"
-                    uy = y + int(height * 0.035)
-                    txt(d, (x, uy), update, f_small, anchor="ls")
 
         im.save(out_dir / f"overlay_{exp.frame:06d}.png", optimize=True)
 
@@ -642,6 +620,9 @@ def main() -> int:
 
     results = []
     bright_values = None
+    air_quality = air_quality_for_run(run_dir, telemetry_rows) if "director" in outputs else None
+    if "director" in outputs:
+        print(f"Director AQI: {air_quality['us_aqi'] if air_quality else 'unavailable'}")
     if args.brightness_source == "frames" and any(x in outputs for x in ("brightness","director")):
         print("\nMeasuring brightness from rendered source frames...")
         bright_values = brightness_series_from_sources(manifest, max_edge=args.brightness_analysis_max_edge)
@@ -650,7 +631,8 @@ def main() -> int:
         if kind in ("brightness","director"):
             ov_dir = run_dir / f"_overlay_stage_{kind}"
             print(f"\nGenerating {kind} overlay frames...")
-            make_overlay_frames(kind, telemetry_rows, expected, cfg["width"], cfg["height"], overlay_cfg, ov_dir, bright_values)
+            make_overlay_frames(kind, telemetry_rows, expected, cfg["width"], cfg["height"],
+                                overlay_cfg, ov_dir, bright_values, air_quality=air_quality if kind == "director" else None)
         print(f"\nRendering {kind}: {planned[kind].name}")
         rc, elapsed = run_ffmpeg(stage, ov_dir, expected[0].frame, cfg, planned[kind], args.overwrite)
         results.append({"kind":kind,"output":str(planned[kind]),"returncode":rc,"render_seconds":elapsed})
@@ -666,6 +648,7 @@ def main() -> int:
         "overlay_config":str(args.overlay_config.expanduser().resolve()),
         "brightness_source": args.brightness_source,
         "exposure_metadata_source": exposure_metadata_source,
+        "air_quality": air_quality,
         "status":"complete" if results and all(r["returncode"]==0 for r in results) and len(results)==len(outputs) else "failed",
     }
     (run_dir / "render_summary_v3.json").write_text(json.dumps(summary,indent=2),encoding="utf-8")
