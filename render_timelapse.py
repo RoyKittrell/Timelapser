@@ -29,6 +29,7 @@ from datetime import datetime
 from pathlib import Path
 
 from v5_overlay_context import air_quality_for_run, run_bounds, solar_markers
+from solar_diagrams import draw_solar_diagrams, run_direction, season_dates
 
 DEFAULT_FPS = 30.0
 
@@ -368,7 +369,8 @@ def _graph_rect(cfg, safe, width, height, kind):
 
 def make_overlay_frames(kind: str, rows: list[dict], expected: list[ExpectedFrame], width: int, height: int,
                         cfg, out_dir: Path, bright_values: list[float] | None = None,
-                        only_frame: int | None = None, air_quality: dict | None = None):
+                        only_frame: int | None = None, air_quality: dict | None = None,
+                        seasons: dict | None = None):
     try:
         from PIL import Image, ImageDraw, ImageFont
     except ImportError:
@@ -442,6 +444,8 @@ def make_overlay_frames(kind: str, rows: list[dict], expected: list[ExpectedFram
     run_date = date_label(rows)
     axis_font = f_small
     start, end = run_bounds(rows)
+    solar_day = start.date()
+    solar_direction = run_direction(rows)
     marker_positions = [
         (round(px0 + (px1-px0) * ((at-start)/(end-start))), icon)
         for at, icon in solar_markers(rows)
@@ -528,6 +532,10 @@ def make_overlay_frames(kind: str, rows: list[dict], expected: list[ExpectedFram
                 txt(d, (x,y), f"ISO {iso_s}   {ap_s}   {fmt_shutter(sh)}", f_large); y += int(height*(cfg.TEXT_SIZE_LARGE + cfg.DIRECTOR_LINE_SPACING))
             if air_quality is not None:
                 txt(d, (x, y + int(height * 0.035)), f"KL  |  AQI {air_quality['us_aqi']}", f_small, anchor="ls")
+            if seasons is not None:
+                draw_solar_diagrams(d, width, height, solar_day, solar_direction,
+                                    seasons, lambda xy, value, face, anchor=None: txt(d, xy, value, face, anchor),
+                                    lambda fraction: font(cfg.FONT_PATH, fraction))
             # No separate SCENE row: the live brightness chart carries scene telemetry.
             if cfg.DIRECTOR_SHOW_BRIGHTNESS_GRAPH:
                 draw_graph_header(d, True, cfg.DIRECTOR_SHOW_CURRENT_BRIGHTNESS,
@@ -632,7 +640,9 @@ def main() -> int:
             ov_dir = run_dir / f"_overlay_stage_{kind}"
             print(f"\nGenerating {kind} overlay frames...")
             make_overlay_frames(kind, telemetry_rows, expected, cfg["width"], cfg["height"],
-                                overlay_cfg, ov_dir, bright_values, air_quality=air_quality if kind == "director" else None)
+                                overlay_cfg, ov_dir, bright_values,
+                                air_quality=air_quality if kind == "director" else None,
+                                seasons=season_dates(run_bounds(telemetry_rows)[0].year, run_dir) if kind == "director" else None)
         print(f"\nRendering {kind}: {planned[kind].name}")
         rc, elapsed = run_ffmpeg(stage, ov_dir, expected[0].frame, cfg, planned[kind], args.overwrite)
         results.append({"kind":kind,"output":str(planned[kind]),"returncode":rc,"render_seconds":elapsed})
