@@ -189,5 +189,5 @@ def draw_solar_diagrams(draw, width: int, height: int, day: date, direction: str
             waist_time, waist_decl = analemma_crossing(day.year)
             waist_x = width * 0.860 + width * 0.0035 * waist_time
             waist_y = height * 0.170 - height * 0.0019 * math.degrees(waist_decl)
-            text((waist_x + width * 0.015, waist_y), name.split()[1].upper(), font(0.009), anchor="lm")
+            text((waist_x + width * 0.022, waist_y), name.split()[1].upper(), font(0.009), anchor="lm")
             break
