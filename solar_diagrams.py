@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 import json
 from datetime import date, datetime, timedelta, timezone
+from functools import lru_cache
 from pathlib import Path
 from urllib.request import urlopen
 
@@ -36,6 +37,29 @@ def annual_points(year: int) -> list[tuple[date, float, float]]:
         points.append((day, eqtime, decl))
         day += timedelta(days=1)
     return points
+
+
+@lru_cache(maxsize=8)
+def analemma_crossing(year: int) -> tuple[float, float]:
+    """Return the self-intersection as (equation-of-time minutes, declination)."""
+    points = [(eqtime, decl) for _, eqtime, decl in annual_points(year)]
+    for i in range(len(points) - 1):
+        x1, y1 = points[i]
+        x2, y2 = points[i + 1]
+        for j in range(i + 2, len(points) - 1):
+            x3, y3 = points[j]
+            x4, y4 = points[j + 1]
+            dx1, dy1 = x2 - x1, y2 - y1
+            dx2, dy2 = x4 - x3, y4 - y3
+            cross = dx1 * dy2 - dy1 * dx2
+            if abs(cross) < 1e-12:
+                continue
+            rx, ry = x3 - x1, y3 - y1
+            t = (rx * dy2 - ry * dx2) / cross
+            u = (rx * dy1 - ry * dx1) / cross
+            if 0 < t < 1 and 0 < u < 1:
+                return x1 + t * dx1, y1 + t * dy1
+    raise ValueError(f"No analemma crossing found for {year}")
 
 
 def approximate_season_dates(year: int) -> dict[str, date]:
@@ -152,9 +176,18 @@ def draw_solar_diagrams(draw, width: int, height: int, day: date, direction: str
     py = height * 0.170 - height * 0.0019 * math.degrees(decl)
     r = width * 0.007
     draw.ellipse((px-r, py-r, px+r, py+r), fill=white, outline=black, width=2)
-    text((width * 0.860, height * 0.095), seasons["June solstice"].strftime("%d %b"), small, anchor="ms")
-    text((width * 0.860, height * 0.236), seasons["December solstice"].strftime("%d %b"), small, anchor="ms")
+    label_gap = height * 0.019
+    top, bottom = min(y for _, y in curve), max(y for _, y in curve)
+    june = seasons["June solstice"].strftime("%d %b")
+    december = seasons["December solstice"].strftime("%d %b")
+    june_bounds = small.getbbox(june, anchor="ms")
+    december_bounds = small.getbbox(december, anchor="ms")
+    text((width * 0.860, top - label_gap - june_bounds[3]), june, small, anchor="ms")
+    text((width * 0.860, bottom + label_gap - december_bounds[1]), december, small, anchor="ms")
     for name, event_day in seasons.items():
         if day == event_day:
-            text((width * 0.818, height * 0.172), name.split()[1].upper(), font(0.009), anchor="rs")
+            waist_time, waist_decl = analemma_crossing(day.year)
+            waist_x = width * 0.860 + width * 0.0035 * waist_time
+            waist_y = height * 0.170 - height * 0.0019 * math.degrees(waist_decl)
+            text((waist_x + width * 0.015, waist_y), name.split()[1].upper(), font(0.009), anchor="lm")
             break

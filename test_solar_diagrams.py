@@ -6,7 +6,7 @@ from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
 
-from solar_diagrams import horizon_azimuth, run_direction, season_dates, solar_terms
+from solar_diagrams import analemma_crossing, horizon_azimuth, run_direction, season_dates, solar_terms
 
 
 class SolarDiagramsTests(unittest.TestCase):
@@ -25,6 +25,11 @@ class SolarDiagramsTests(unittest.TestCase):
         self.assertGreater(june[1], 0)
         self.assertLess(december[1], 0)
         self.assertNotEqual(june[0], december[0])
+
+    def test_analemma_crossing_is_computed_from_both_paths(self):
+        eqtime, decl = analemma_crossing(2026)
+        self.assertLess(abs(eqtime), 10)
+        self.assertLess(abs(decl), 0.3)
 
     def test_usno_dates_are_local_and_cached(self):
         payload = {"data": [
