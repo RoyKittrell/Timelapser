@@ -144,17 +144,17 @@ def draw_solar_diagrams(draw, width: int, height: int, day: date, direction: str
     curve = []
     for _, eqtime, decl in points:
         curve.append((width * 0.835 + width * 0.0035 * eqtime,
-                      height * 0.282 - height * 0.0026 * math.degrees(decl)))
+                      height * 0.170 - height * 0.0019 * math.degrees(decl)))
     draw.line(curve + [curve[0]], fill=black, width=thin + 3, joint="curve")
     draw.line(curve + [curve[0]], fill=white, width=thin, joint="curve")
     eqtime, decl = solar_terms(day)
     px = width * 0.835 + width * 0.0035 * eqtime
-    py = height * 0.282 - height * 0.0026 * math.degrees(decl)
+    py = height * 0.170 - height * 0.0019 * math.degrees(decl)
     r = width * 0.007
     draw.ellipse((px-r, py-r, px+r, py+r), fill=white, outline=black, width=2)
-    text((width * 0.835, height * 0.197), seasons["June solstice"].strftime("%d %b"), small, anchor="ms")
-    text((width * 0.835, height * 0.367), seasons["December solstice"].strftime("%d %b"), small, anchor="ms")
+    text((width * 0.835, height * 0.095), seasons["June solstice"].strftime("%d %b"), small, anchor="ms")
+    text((width * 0.835, height * 0.236), seasons["December solstice"].strftime("%d %b"), small, anchor="ms")
     for name, event_day in seasons.items():
         if day == event_day:
-            text((width * 0.865, height * 0.284), name.split()[1].upper(), small, anchor="ls")
+            text((width * 0.865, height * 0.172), name.split()[1].upper(), small, anchor="ls")
             break
