@@ -367,7 +367,8 @@ def _graph_rect(cfg, safe, width, height, kind):
 
 
 def make_overlay_frames(kind: str, rows: list[dict], expected: list[ExpectedFrame], width: int, height: int,
-                        cfg, out_dir: Path, bright_values: list[float] | None = None):
+                        cfg, out_dir: Path, bright_values: list[float] | None = None,
+                        only_frame: int | None = None):
     try:
         from PIL import Image, ImageDraw, ImageFont
     except ImportError:
@@ -410,35 +411,30 @@ def make_overlay_frames(kind: str, rows: list[dict], expected: list[ExpectedFram
             frac -= 0.002
         return font(bold_path, min_frac)
 
-    def graph_title_parts(title):
-        title = str(title or "").strip()
-        date_text = ""
-        if "  " in title:
-            title, date_text = title.split("  ", 1)
-        if "(" in title:
-            title = title.split("(", 1)[0].strip()
-        return title.upper(), date_text.strip()
-
-    def draw_graph_header(draw, title, value, left_x, right_x, y):
-        gap = max(12, int(width * 0.016))
-        available = max(40, right_x - left_x)
-        title_text, date_text = graph_title_parts(title)
-        header_frac = min(cfg.TEXT_SIZE_TITLE, 0.022)
-        value_font = fit_font(draw, value, cfg.FONT_BOLD_PATH, header_frac, available * 0.30)
-        value_w = text_width(draw, value, value_font)
-        title_max = max(40, available - value_w - gap)
-        title_font = fit_font(draw, title_text, cfg.FONT_BOLD_PATH, header_frac, title_max)
-        txt(draw, (left_x, y), title_text, title_font)
-        if date_text:
-            txt(draw, (left_x, y + int(height * 0.021)), date_text, f_small)
-        txt(draw, (right_x, y), value, value_font, anchor="ra")
-
     gx0, gy0, gx1, gy1 = graph
     # Internal graph padding reserves labels without crossing the safe area.
     pad_l = int(width * 0.020); pad_r = int(width * 0.012)
-    pad_t = int(height * 0.026); pad_b = int(height * 0.020)
+    pad_t = int(height * 0.048); pad_b = int(height * 0.020)
     px0, py0, px1, py1 = gx0+pad_l, gy0+pad_t, gx1-pad_r, gy1-pad_b
     yrange = max(1e-9, cfg.GRAPH_Y_MAX - cfg.GRAPH_Y_MIN)
+
+    def draw_graph_header(draw, show_title, show_value, value):
+        left = gx0 + pad_l
+        right = gx1 - pad_r
+        date_text = run_date if getattr(cfg, "OVERLAY_SHOW_DATE", True) else ""
+        header_y = gy0 - int(height * 0.008)
+        if show_title:
+            title = str(cfg.BRIGHTNESS_TITLE).split("(", 1)[0].strip().upper()
+            available = (right - left) * (0.60 if date_text else 1.0)
+            title_font = fit_font(draw, title, cfg.FONT_BOLD_PATH, 0.022, available)
+            txt(draw, (left, header_y), title, title_font, anchor="ls")
+        if date_text:
+            date_font = fit_font(draw, date_text, cfg.FONT_BOLD_PATH, 0.020,
+                                 (right - left) * (0.38 if show_title else 1.0))
+            txt(draw, (right, header_y), date_text, date_font, anchor="rs")
+        if show_value:
+            value_font = fit_font(draw, value, cfg.FONT_BOLD_PATH, 0.022, (right - left) * 0.30)
+            txt(draw, (right, gy0 + int(height * 0.007)), value, value_font, anchor="ra")
 
     # Precompute coordinates for speed.
     xs = [px0 + (px1-px0) * (i / max(1, n-1)) for i in range(n)]
@@ -473,6 +469,8 @@ def make_overlay_frames(kind: str, rows: list[dict], expected: list[ExpectedFram
             draw.polygon(points, fill="white")
 
     for i, (row, exp) in enumerate(zip(rows, expected)):
+        if only_frame is not None and exp.frame != only_frame:
+            continue
         im = Image.new("RGBA", (width, height), (0,0,0,0)); d = ImageDraw.Draw(im, "RGBA")
 
         # Brightness graph panel.
@@ -505,22 +503,12 @@ def make_overlay_frames(kind: str, rows: list[dict], expected: list[ExpectedFram
         cx, cy = xs[upto-1], ys[upto-1]
         d.ellipse((cx-radius,cy-radius,cx+radius,cy+radius), fill=(255,255,255,255), outline=(0,0,0,255), width=max(1,stroke))
 
-        title_y = gy0 + int(height*0.006)
         if kind == "brightness":
-            title = cfg.BRIGHTNESS_TITLE
-            if run_date and getattr(cfg, "OVERLAY_SHOW_DATE", True):
-                title = f"{title}  {run_date}"
-            value = f"{bright[i]:.3f}"
-            if cfg.BRIGHTNESS_SHOW_TITLE and cfg.BRIGHTNESS_SHOW_CURRENT_VALUE:
-                draw_graph_header(d, title, value, gx0+int(width*0.055), gx1-pad_r, title_y)
-            elif cfg.BRIGHTNESS_SHOW_TITLE:
-                title_font = fit_font(d, title, cfg.FONT_BOLD_PATH, cfg.TEXT_SIZE_TITLE, px1 - px0)
-                txt(d, (gx0+pad_l, title_y), title, title_font)
-            elif cfg.BRIGHTNESS_SHOW_CURRENT_VALUE:
-                value_font = fit_font(d, value, cfg.FONT_BOLD_PATH, cfg.TEXT_SIZE_TITLE, px1 - px0)
-                txt(d, (gx1-pad_r, title_y), value, value_font, anchor="ra")
+            draw_graph_header(d, cfg.BRIGHTNESS_SHOW_TITLE, cfg.BRIGHTNESS_SHOW_CURRENT_VALUE,
+                              f"{bright[i]:.3f}")
             meta = []
-            if cfg.BRIGHTNESS_SHOW_TIME: meta.append(short_time(row))
+            if cfg.BRIGHTNESS_SHOW_TIME and not getattr(cfg, "GRAPH_SHOW_AXIS_LABELS", True):
+                meta.append(short_time(row))
             if cfg.BRIGHTNESS_SHOW_FRAME: meta.append(f"FRAME {exp.frame:04d}")
             if meta: txt(d, (gx0+pad_l, gy1-int(height*0.006)), "  •  ".join(meta), f_small, anchor="ls")
 
@@ -540,16 +528,8 @@ def make_overlay_frames(kind: str, rows: list[dict], expected: list[ExpectedFram
                 txt(d, (x,y), f"ISO {iso_s}   {ap_s}   {fmt_shutter(sh)}", f_large); y += int(height*(cfg.TEXT_SIZE_LARGE + cfg.DIRECTOR_LINE_SPACING))
             # No separate SCENE row: the live brightness chart carries scene telemetry.
             if cfg.DIRECTOR_SHOW_BRIGHTNESS_GRAPH:
-                # Match the brightness-only chart header exactly: title left, number right.
-                title = cfg.BRIGHTNESS_TITLE
-                if run_date and getattr(cfg, "OVERLAY_SHOW_DATE", True):
-                    title = f"{title}  {run_date}"
-                value = f"{bright[i]:.3f}"
-                if cfg.DIRECTOR_SHOW_CURRENT_BRIGHTNESS:
-                    draw_graph_header(d, title, value, gx0+int(width*0.055), gx1-pad_r, title_y)
-                else:
-                    title_font = fit_font(d, title, cfg.FONT_BOLD_PATH, cfg.TEXT_SIZE_TITLE, px1 - px0)
-                    txt(d, (gx0+pad_l, title_y), title, title_font)
+                draw_graph_header(d, True, cfg.DIRECTOR_SHOW_CURRENT_BRIGHTNESS,
+                                  f"{bright[i]:.3f}")
 
             # Camera updates are inferred from settings that actually appear in telemetry.
             # Therefore rejected AI proposals can never be displayed here.
@@ -572,8 +552,8 @@ def make_overlay_frames(kind: str, rows: list[dict], expected: list[ExpectedFram
                     iso_s = str(int(round(iso))) if math.isfinite(iso) else "—"
                     ap_s = f"ƒ/{ap:g}" if math.isfinite(ap) else "ƒ/—"
                     update = f"CAMERA UPDATE  ✓  ISO {iso_s}   {ap_s}   {fmt_shutter(sh)}"
-                    uy = gy0 - int(height * 0.012)
-                    txt(d, (gx0+pad_l, uy), update, f_small, anchor="ls")
+                    uy = y + int(height * 0.035)
+                    txt(d, (x, uy), update, f_small, anchor="ls")
 
         im.save(out_dir / f"overlay_{exp.frame:06d}.png", optimize=True)
 
