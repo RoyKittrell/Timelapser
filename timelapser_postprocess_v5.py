@@ -388,6 +388,18 @@ def run_postprocess(
                 summary["status"] = "failed_copy_to_mac"
                 return summary
 
+        if render:
+            step = _run_step(
+                log_path,
+                "prune_rendered_images_older_than_30_days",
+                [python, str(root / "prune_old_frames.py"), str(run_dir.parent), "--days", "30"],
+                root,
+            )
+            summary["steps"].append(step)
+            if step["returncode"] != 0:
+                summary["status"] = "failed_image_retention"
+                return summary
+
         summary["status"] = "complete"
         return summary
     except Exception as exc:

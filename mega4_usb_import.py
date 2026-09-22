@@ -112,6 +112,7 @@ def main() -> int:
                 str(args.run_dir.resolve()),
                 "--sd-root",
                 str(sd_root),
+                "--delete-imported-from-sd",
             ],
             check=False,
         )

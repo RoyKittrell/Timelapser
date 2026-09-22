@@ -67,9 +67,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--output-dirname", default=DEFAULT_OUTPUT_DIRNAME)
     p.add_argument("--dry-run", action="store_true", help="Report mappings without copying or deleting.")
     p.add_argument("--replace-thumbnails", action="store_true", help="Delete frames_jpeg/*.jpg after a complete verified import.")
+    p.add_argument("--delete-imported-from-sd", action="store_true", help="Remove only verified, imported camera JPEGs after a complete run import.")
     p.add_argument("--force", action="store_true", help="Overwrite existing full JPEGs even when size matches.")
     p.add_argument("--time-tolerance-seconds", type=float, default=DEFAULT_TIME_TOLERANCE_SECONDS)
-    p.add_argument("--progress-every", type=int, default=50, help="Print copy progress every N frames.")
     p.add_argument(
         "--allow-time-mismatch",
         action="store_true",
@@ -251,7 +251,7 @@ def resolve_run(path_or_name: str) -> Path:
 
 def all_runs() -> list[Path]:
     runs = []
-    for path in V5_ROOT.glob("*_v5*wifi"):
+    for path in V5_ROOT.glob("*_v5_wifi"):
         if path.is_dir() and (path / "telemetry.csv").exists():
             runs.append(path.resolve())
     return sorted(runs, key=lambda path: path.stat().st_mtime, reverse=True)
@@ -272,7 +272,7 @@ def import_run(run_dir: Path, sd_index: dict[str, list[SourceFile]], args: argpa
     copied = skipped = 0
     bytes_total = 0
 
-    for index, exp in enumerate(expected, start=1):
+    for exp in expected:
         src, status, delta = choose_source(
             exp,
             sd_index.get(exp.remote_jpg, []),
@@ -319,15 +319,20 @@ def import_run(run_dir: Path, sd_index: dict[str, list[SourceFile]], args: argpa
                 row["error"] = reason
                 failures.append(row)
         manifest_rows.append(row)
-        if args.progress_every > 0 and (index % args.progress_every == 0 or index == len(expected)):
-            print(
-                f"  {run_dir.name}: {index}/{len(expected)} frames "
-                f"copied={copied} skipped={skipped} failures={len(failures)}",
-                flush=True,
-            )
 
     complete = len(failures) == 0 and len(expected) > 0
     deleted_thumbnails = 0
+    deleted_sd_jpegs = 0
+    if complete and args.delete_imported_from_sd and not args.dry_run:
+        sources = {row["source_path"]: row for row in manifest_rows}
+        for source_path, row in sources.items():
+            dest = out_dir / row["dest_file"]
+            ok, reason = validate_jpeg(dest)
+            if not ok or dest.stat().st_size != row["bytes"]:
+                raise RuntimeError(f"Refusing SD cleanup: {dest} failed verification ({reason})")
+        for source_path in sources:
+            Path(source_path).unlink()
+            deleted_sd_jpegs += 1
     if complete and args.replace_thumbnails and not args.dry_run:
         thumb_dir = run_dir / "frames_jpeg"
         if thumb_dir.exists():
@@ -370,6 +375,7 @@ def import_run(run_dir: Path, sd_index: dict[str, list[SourceFile]], args: argpa
         "output_dir": str(out_dir),
         "manifest": str(manifest_path),
         "deleted_thumbnails": deleted_thumbnails,
+        "deleted_sd_jpegs": deleted_sd_jpegs,
     }
 
 
