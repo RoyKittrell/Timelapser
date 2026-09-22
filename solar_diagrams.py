@@ -1,7 +1,7 @@
 """Small date-driven solar diagrams for the Director overlay.
 
-The analemma uses NOAA's equation-of-time and declination approximations at
-local noon. Horizon azimuth assumes a level horizon and standard refraction.
+The analemma is a symmetric schematic; horizon azimuth uses NOAA solar
+declination and assumes a level horizon with standard refraction.
 """
 
 from __future__ import annotations
@@ -9,7 +9,6 @@ from __future__ import annotations
 import math
 import json
 from datetime import date, datetime, timedelta, timezone
-from functools import lru_cache
 from pathlib import Path
 from urllib.request import urlopen
 
@@ -39,27 +38,29 @@ def annual_points(year: int) -> list[tuple[date, float, float]]:
     return points
 
 
-@lru_cache(maxsize=8)
-def analemma_crossing(year: int) -> tuple[float, float]:
-    """Return the self-intersection as (equation-of-time minutes, declination)."""
-    points = [(eqtime, decl) for _, eqtime, decl in annual_points(year)]
-    for i in range(len(points) - 1):
-        x1, y1 = points[i]
-        x2, y2 = points[i + 1]
-        for j in range(i + 2, len(points) - 1):
-            x3, y3 = points[j]
-            x4, y4 = points[j + 1]
-            dx1, dy1 = x2 - x1, y2 - y1
-            dx2, dy2 = x4 - x3, y4 - y3
-            cross = dx1 * dy2 - dy1 * dx2
-            if abs(cross) < 1e-12:
-                continue
-            rx, ry = x3 - x1, y3 - y1
-            t = (rx * dy2 - ry * dx2) / cross
-            u = (rx * dy1 - ry * dx1) / cross
-            if 0 < t < 1 and 0 < u < 1:
-                return x1 + t * dx1, y1 + t * dy1
-    raise ValueError(f"No analemma crossing found for {year}")
+def analemma_point(phase: float) -> tuple[float, float]:
+    """Symmetric lobes, with the December loop wider than the June loop."""
+    seasonal_y = -math.sin(phase)
+    return (math.sin(2 * phase) * (0.72 + 0.28 * seasonal_y),
+            seasonal_y * (1 + 0.22 * seasonal_y))
+
+
+def analemma_phase(day: date, seasons: dict[str, date]) -> float:
+    march = seasons["March equinox"]
+    june = seasons["June solstice"]
+    september = seasons["September equinox"]
+    december = seasons["December solstice"]
+    if day < march:
+        start, end, base = december.replace(year=day.year - 1), march, -math.pi / 2
+    elif day < june:
+        start, end, base = march, june, 0.0
+    elif day < september:
+        start, end, base = june, september, math.pi / 2
+    elif day < december:
+        start, end, base = september, december, math.pi
+    else:
+        start, end, base = december, march.replace(year=day.year + 1), 3 * math.pi / 2
+    return base + (day - start).days / (end - start).days * math.pi / 2
 
 
 def approximate_season_dates(year: int) -> dict[str, date]:
@@ -164,16 +165,16 @@ def draw_solar_diagrams(draw, width: int, height: int, day: date, direction: str
         text((center, cy + height * 0.016),
              f"{direction.upper()} {azimuth:.1f}\N{DEGREE SIGN}", small, anchor="ms")
 
-    points = annual_points(day.year)
+    center_x, center_y = width * 0.860, height * 0.170
+    radius_x, radius_y = width * 0.050, height * 0.055
     curve = []
-    for _, eqtime, decl in points:
-        curve.append((width * 0.860 + width * 0.0035 * eqtime,
-                      height * 0.170 - height * 0.0019 * math.degrees(decl)))
+    for step in range(361):
+        x_unit, y_unit = analemma_point(step * 2 * math.pi / 360)
+        curve.append((center_x + radius_x * x_unit, center_y + radius_y * y_unit))
     draw.line(curve + [curve[0]], fill=black, width=thin + 3, joint="curve")
     draw.line(curve + [curve[0]], fill=white, width=thin, joint="curve")
-    eqtime, decl = solar_terms(day)
-    px = width * 0.860 + width * 0.0035 * eqtime
-    py = height * 0.170 - height * 0.0019 * math.degrees(decl)
+    x_unit, y_unit = analemma_point(analemma_phase(day, seasons))
+    px, py = center_x + radius_x * x_unit, center_y + radius_y * y_unit
     r = width * 0.007
     draw.ellipse((px-r, py-r, px+r, py+r), fill=white, outline=black, width=2)
     label_gap = height * 0.019
@@ -186,8 +187,5 @@ def draw_solar_diagrams(draw, width: int, height: int, day: date, direction: str
     text((width * 0.860, bottom + label_gap - december_bounds[1]), december, small, anchor="ms")
     for name, event_day in seasons.items():
         if day == event_day:
-            waist_time, waist_decl = analemma_crossing(day.year)
-            waist_x = width * 0.860 + width * 0.0035 * waist_time
-            waist_y = height * 0.170 - height * 0.0019 * math.degrees(waist_decl)
-            text((waist_x + width * 0.022, waist_y), name.split()[1].upper(), font(0.009), anchor="lm")
+            text((center_x + width * 0.022, center_y), name.split()[1].upper(), font(0.009), anchor="lm")
             break
