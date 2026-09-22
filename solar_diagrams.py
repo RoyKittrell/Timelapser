@@ -165,7 +165,7 @@ def draw_solar_diagrams(draw, width: int, height: int, day: date, direction: str
         text((center, cy + height * 0.016),
              f"{direction.upper()} {azimuth:.1f}\N{DEGREE SIGN}", small, anchor="ms")
 
-    center_x, center_y = width * 0.860, height * 0.170
+    center_x, center_y = width * 0.860, height * 0.120
     radius_x, radius_y = width * 0.050, height * 0.055
     curve = []
     for step in range(361):
