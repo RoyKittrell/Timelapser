@@ -529,7 +529,17 @@ def make_overlay_frames(kind: str, rows: list[dict], expected: list[ExpectedFram
                 sh = num(row, "actual_shutter_seconds", "shutter_seconds")
                 iso_s = str(int(round(iso))) if math.isfinite(iso) else "—"
                 ap_s = f"ƒ/{ap:g}" if math.isfinite(ap) else "ƒ/—"
-                txt(d, (x,y), f"ISO {iso_s}   {ap_s}   {fmt_shutter(sh)}", f_large); y += int(height*(cfg.TEXT_SIZE_LARGE + cfg.DIRECTOR_LINE_SPACING))
+                exposure = f"ISO {iso_s}   {ap_s}   {fmt_shutter(sh)}"
+                exposure_right = width * getattr(cfg, "DIRECTOR_EXPOSURE_RIGHT", 0.79)
+                exposure_font = fit_font(
+                    d,
+                    exposure,
+                    cfg.FONT_BOLD_PATH,
+                    cfg.TEXT_SIZE_LARGE,
+                    max(1, exposure_right - x),
+                    getattr(cfg, "DIRECTOR_EXPOSURE_MIN_SIZE", 0.024),
+                )
+                txt(d, (x,y), exposure, exposure_font); y += int(height*(cfg.TEXT_SIZE_LARGE + cfg.DIRECTOR_LINE_SPACING))
             if air_quality is not None:
                 txt(d, (x, y + int(height * 0.035)), f"KL  |  AQI {air_quality['us_aqi']}", f_small, anchor="ls")
             if seasons is not None:

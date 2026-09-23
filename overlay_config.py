@@ -117,6 +117,9 @@ DIRECTOR_SHOW_CURRENT_BRIGHTNESS = True
 # Top information block, relative to safe area.
 DIRECTOR_INFO_X = 0.00
 DIRECTOR_INFO_Y = 0.00
+# Exposure text shrinks as needed so it cannot enter the analemma area.
+DIRECTOR_EXPOSURE_RIGHT = 0.79
+DIRECTOR_EXPOSURE_MIN_SIZE = 0.024
 
 # Spacing between Director text rows, as fraction of video height.
 DIRECTOR_LINE_SPACING = 0.008
