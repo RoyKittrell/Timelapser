@@ -58,6 +58,26 @@ TIMELAPSER_PROCESS_NAMES = (
     'timelapser_v5_aperture_priority.py',
 )
 
+
+def configured_output_root() -> Path:
+    override = os.environ.get('TIMELAPSER_OUTPUT_ROOT')
+    if override:
+        return Path(override).expanduser()
+
+    schedule_path = V5_ROOT / 'schedule.py'
+    try:
+        spec = importlib.util.spec_from_file_location('director_output_config', schedule_path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f'Cannot load {schedule_path}')
+        schedule = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(schedule)
+        return Path(schedule.OUTPUT_ROOT).expanduser()
+    except Exception:
+        return PROJECT_ROOT
+
+
+RUNS_ROOT = configured_output_root()
+
 load_dotenv(ENV_FILE)
 
 st.set_page_config(
@@ -128,7 +148,7 @@ st.markdown(
 
 def list_v5_runs() -> list[Path]:
     candidates: list[Path] = []
-    roots = [V5_ROOT, PROJECT_ROOT]
+    roots = list(dict.fromkeys((RUNS_ROOT, V5_ROOT, PROJECT_ROOT)))
     seen: set[Path] = set()
     for root in roots:
         if not root.exists():
@@ -985,7 +1005,7 @@ def timelapse_status_answer(selected_run: Path | None = None) -> str:
 
 
 def disk_space_answer() -> str:
-    usage = shutil.disk_usage(V5_ROOT)
+    usage = shutil.disk_usage(RUNS_ROOT)
     total = float(usage.total)
     free = float(usage.free)
     used = float(usage.used)
@@ -999,7 +1019,7 @@ def disk_space_answer() -> str:
     elif free_pct < 20:
         level = 'CAUTION'
     return (
-        'Pi storage:\n'
+        'Timelapse storage:\n'
         f'Free: {format_bytes(free)} ({free_pct:.1f}%)\n'
         f'Used: {format_bytes(used)} ({used_pct:.1f}%)\n'
         f'Total: {format_bytes(total)}\n'
@@ -1537,7 +1557,7 @@ runs = list_v5_runs()
 if not runs:
     st.title('📷 Timelapser V5 Director')
     st.warning('No V5 Wi-Fi run folders found yet.')
-    st.caption(f'Looking below {V5_ROOT} and {PROJECT_ROOT}.')
+    st.caption(f'Looking below {RUNS_ROOT}, {V5_ROOT}, and {PROJECT_ROOT}.')
     st.stop()
 
 run_names = [p.name for p in runs]
