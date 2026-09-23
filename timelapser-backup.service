@@ -1,0 +1,10 @@
+[Unit]
+Description=Verified nightly Raspberry Pi SD-card backup
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemd-inhibit --what=shutdown:sleep --why=Timelapser-backup /usr/local/sbin/timelapser-nightly-backup
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=4h

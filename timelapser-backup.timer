@@ -1,0 +1,17 @@
+[Unit]
+Description=Retry the nightly Timelapser backup while the system is quiet
+
+[Timer]
+OnCalendar=*-*-* 00:00:00
+OnCalendar=*-*-* 01:00:00
+OnCalendar=*-*-* 02:00:00
+OnCalendar=*-*-* 03:00:00
+OnCalendar=*-*-* 04:00:00
+OnCalendar=*-*-* 05:00:00
+Persistent=true
+AccuracySec=1min
+Unit=timelapser-backup.service
+
+[Install]
+WantedBy=timers.target
+
