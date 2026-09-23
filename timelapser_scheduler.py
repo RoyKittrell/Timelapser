@@ -253,8 +253,7 @@ def run_preflight(mod, m: Mission) -> tuple[bool, list[str]]:
     except Exception as exc:
         notes.append(f"WARN disk check failed: {exc}")
 
-    # Check that wlan1 exists. Do not fail merely because carrier is momentarily
-    # absent; actual camera connection is owned by the timelapser stack.
+    # The external adapter (wlan1) owns the home/internet connection.
     if shutil.which("iw"):
         r = subprocess.run(["iw", "dev"], capture_output=True, text=True)
         if "Interface wlan1" in r.stdout:
@@ -264,6 +263,27 @@ def run_preflight(mod, m: Mission) -> tuple[bool, list[str]]:
             notes.append("FAIL wlan1 not found")
     else:
         notes.append("WARN iw command not installed")
+
+    # NetworkManager requires privileged activation from this headless service.
+    # A narrowly scoped sudoers rule allows only this fixed-profile helper.
+    camera_wifi_helper = Path("/usr/local/sbin/timelapser-camera-wifi")
+    if camera_wifi_helper.exists():
+        try:
+            result = subprocess.run(
+                ["sudo", "-n", str(camera_wifi_helper), "connect"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode == 0:
+                notes.append("OK Olympus Wi-Fi connected on wlan0")
+            else:
+                detail = (result.stderr or result.stdout).strip().splitlines()
+                notes.append(f"WARN Olympus Wi-Fi activation failed: {detail[-1] if detail else result.returncode}")
+        except Exception as exc:
+            notes.append(f"WARN Olympus Wi-Fi activation failed: {type(exc).__name__}: {exc}")
+    else:
+        notes.append("WARN camera Wi-Fi helper is not installed")
 
     # Olympus-safe informational reachability check.  The camera root URL is
     # not a normal web page and can misleadingly fail; get_caminfo.cgi is a

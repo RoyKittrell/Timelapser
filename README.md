@@ -71,6 +71,7 @@ Important files:
 - `timelapser_postprocess_v5.py`: post-run workflow wrapper.
 - `instagram_formats.py`: preserves the 9:16 masters and creates full-frame 4:5 carousel copies.
 - `instagram_auto_publish.py`: resumable carousel + Reels-only publisher for completed runs or manual folders.
+- `install-camera-wifi-connect.sh`: one-time setup for passwordless, camera-only Wi-Fi activation during scheduler preflight.
 
 Manual publishing uses the same four filenames as a completed run. Put one
 `*instagram-carousel_clean.mp4`, `*instagram-carousel_director.mp4`,
