@@ -25,5 +25,6 @@ visudo -cf "$SUDOERS"
 
 "$HELPER" connect
 sudo -u roy sudo -n "$HELPER" connect >/dev/null
+/usr/bin/systemctl restart timelapser-scheduler.service
 
 echo "Camera Wi-Fi auto-connect helper installed and tested."
