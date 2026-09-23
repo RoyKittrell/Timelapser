@@ -109,6 +109,24 @@ def create_carousel(user_id: str, token: str, children: list[str], caption: str)
     return str(container)
 
 
+def create_reel(user_id: str, token: str, video_url: str, caption: str) -> str:
+    result = request(
+        f"{user_id}/media",
+        method="POST",
+        data={
+            "media_type": "REELS",
+            "video_url": video_url,
+            "caption": caption,
+            "share_to_feed": "true",
+            "access_token": token,
+        },
+    )
+    container = result.get("id")
+    if not container:
+        raise RuntimeError(f"Reel response had no container ID: {result}")
+    return str(container)
+
+
 def publish(user_id: str, token: str, creation_id: str) -> str:
     result = request(
         f"{user_id}/media_publish",
@@ -127,8 +145,11 @@ def main() -> int:
     parser.add_argument("--caption", required=True)
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--publish", action="store_true", help="Perform the final public publish call")
+    parser.add_argument("--reel", action="store_true", help="Publish one URL as a 9:16 Reel")
     args = parser.parse_args()
-    if not 2 <= len(args.video_urls) <= 10:
+    if args.reel and len(args.video_urls) != 1:
+        parser.error("--reel requires exactly one video URL")
+    if not args.reel and not 2 <= len(args.video_urls) <= 10:
         parser.error("Instagram carousels require 2 to 10 items")
     if any(not url.startswith("https://") for url in args.video_urls):
         parser.error("Every carousel item must use public HTTPS")
@@ -139,6 +160,17 @@ def main() -> int:
         raise SystemExit(f"IG_ACCESS_TOKEN missing from {ENV_FILE}")
 
     user_id = account_id(token)
+    if args.reel:
+        print("Creating Reel", flush=True)
+        container = create_reel(user_id, token, args.video_urls[0], args.caption)
+        wait_until_ready(container, token, args.timeout)
+        if not args.publish:
+            print(json.dumps({"ready": True, "reel_id": container}, indent=2))
+            return 0
+        media_id = publish(user_id, token, container)
+        print(json.dumps({"published": True, "media_id": media_id, "reel_id": container}, indent=2))
+        return 0
+
     children = []
     for position, url in enumerate(args.video_urls, start=1):
         print(f"Creating video item {position}/{len(args.video_urls)}", flush=True)

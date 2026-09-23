@@ -367,6 +367,22 @@ def run_postprocess(
                 summary["status"] = "failed_render"
                 return summary
 
+            step = _run_step(
+                log_path,
+                "create_instagram_carousel_formats",
+                [
+                    python,
+                    str(root / "instagram_formats.py"),
+                    str(run_dir),
+                    "--overwrite",
+                ],
+                root,
+            )
+            summary["steps"].append(step)
+            if step["returncode"] != 0:
+                summary["status"] = "failed_instagram_formats"
+                return summary
+
         if queue_instagram:
             final_reel = run_dir / f"{run_dir.name}_final_instagram-reel_clean.mp4"
             step = _queue_instagram_reel(
