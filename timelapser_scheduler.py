@@ -274,27 +274,40 @@ def run_preflight(mod, m: Mission) -> tuple[bool, list[str]]:
     except Exception as exc:
         notes.append(f"WARN disk check failed: {exc}")
 
-    # The external adapter (wlan1) owns the home/internet connection.
-    if shutil.which("iw"):
-        r = subprocess.run(["iw", "dev"], capture_output=True, text=True)
-        if "Interface wlan1" in r.stdout:
-            notes.append("OK wlan1 exists")
-        else:
-            ok = False
-            notes.append("FAIL wlan1 not found")
+    # The external adapter (wlan1) owns the home/internet connection. The
+    # kernel interface path is available even on minimal images without iw.
+    if Path("/sys/class/net/wlan1").exists():
+        notes.append("OK wlan1 exists")
     else:
-        notes.append("WARN iw command not installed")
+        ok = False
+        notes.append("FAIL wlan1 not found")
 
     # NetworkManager requires privileged activation from this headless service.
     # A narrowly scoped sudoers rule allows only this fixed-profile helper.
     camera_wifi_helper = Path("/usr/local/sbin/timelapser-camera-wifi")
-    if camera_wifi_helper.exists():
+    camera_profile = "E-M5MKIII-P-BJ8A00203"
+    camera_connected = False
+    if shutil.which("nmcli"):
+        try:
+            state = subprocess.run(
+                ["nmcli", "-t", "-f", "GENERAL.STATE,GENERAL.CONNECTION", "device", "show", "wlan0"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            camera_connected = state.returncode == 0 and camera_profile in state.stdout and "100 (connected)" in state.stdout
+        except (OSError, subprocess.TimeoutExpired):
+            camera_connected = False
+
+    if camera_connected:
+        notes.append("OK Olympus Wi-Fi connected on wlan0")
+    elif camera_wifi_helper.exists():
         try:
             result = subprocess.run(
                 ["sudo", "-n", str(camera_wifi_helper), "connect"],
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=15,
             )
             if result.returncode == 0:
                 notes.append("OK Olympus Wi-Fi connected on wlan0")

@@ -85,7 +85,7 @@ st.set_page_config(
     page_title='Timelapser V5 Director',
     page_icon='📷',
     layout='wide',
-    initial_sidebar_state='expanded',
+    initial_sidebar_state='collapsed',
 )
 
 st.markdown(
@@ -94,6 +94,7 @@ st.markdown(
     html, body, [data-testid="stAppViewContainer"] {
         max-width: 100vw;
         overflow-x: hidden;
+        -webkit-text-size-adjust: 100%;
     }
 
     [data-testid="stMetricValue"] {
@@ -111,12 +112,35 @@ st.markdown(
         word-break: break-word;
     }
 
-    @media (max-width: 768px) {
+    [data-testid="stMarkdownContainer"],
+    [data-testid="stAlertContainer"],
+    [data-testid="stCaptionContainer"] {
+        min-width: 0;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+    }
+
+    @media (max-width: 600px) {
         .block-container {
             max-width: 100vw;
-            padding-left: 1rem;
-            padding-right: 1rem;
-            padding-top: 1.25rem;
+            width: 100%;
+            padding-left: 0.75rem;
+            padding-right: 0.75rem;
+            padding-top: 0.75rem;
+            padding-bottom: 2rem;
+        }
+
+        h1 {
+            font-size: 1.85rem !important;
+            line-height: 1.15 !important;
+        }
+
+        h2 {
+            font-size: 1.45rem !important;
+        }
+
+        h3 {
+            font-size: 1.2rem !important;
         }
 
         [data-testid="column"] {
@@ -132,6 +156,21 @@ st.markdown(
 
         [data-testid="stMetric"] {
             min-width: 0;
+        }
+
+        [data-testid="stMetricValue"] {
+            font-size: 1.45rem;
+        }
+
+        [data-testid="stForm"],
+        [data-testid="stExpander"],
+        [data-testid="stAlertContainer"] {
+            max-width: 100%;
+            min-width: 0;
+        }
+
+        button, input, textarea, select {
+            max-width: 100%;
         }
     }
     </style>
