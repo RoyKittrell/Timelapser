@@ -4,7 +4,7 @@ set -Eeuo pipefail
 BACKUP_DRIVE="/media/roy/My Passport"
 BACKUP_UUID="C6BEB888BEB87293"
 BACKUP_ROOT="$BACKUP_DRIVE/Pi SD Backups"
-KEEP_BACKUPS=7
+KEEP_BACKUPS=2
 MIN_FREE_GIB=12
 LOCK_FILE="/run/lock/timelapser-nightly-backup.lock"
 TODAY="$(date +%F)"
