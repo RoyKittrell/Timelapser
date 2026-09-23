@@ -3,3 +3,4 @@ openai
 numpy
 opencv-python
 astral
+python-dotenv
