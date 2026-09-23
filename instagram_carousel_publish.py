@@ -109,7 +109,14 @@ def create_carousel(user_id: str, token: str, children: list[str], caption: str)
     return str(container)
 
 
-def create_reel(user_id: str, token: str, video_url: str, caption: str) -> str:
+def create_reel(
+    user_id: str,
+    token: str,
+    video_url: str,
+    caption: str,
+    *,
+    share_to_feed: bool = False,
+) -> str:
     result = request(
         f"{user_id}/media",
         method="POST",
@@ -117,7 +124,7 @@ def create_reel(user_id: str, token: str, video_url: str, caption: str) -> str:
             "media_type": "REELS",
             "video_url": video_url,
             "caption": caption,
-            "share_to_feed": "true",
+            "share_to_feed": "true" if share_to_feed else "false",
             "access_token": token,
         },
     )
@@ -146,9 +153,16 @@ def main() -> int:
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--publish", action="store_true", help="Perform the final public publish call")
     parser.add_argument("--reel", action="store_true", help="Publish one URL as a 9:16 Reel")
+    parser.add_argument(
+        "--share-to-feed",
+        action="store_true",
+        help="Also show a Reel in the main feed/profile grid (off by default)",
+    )
     args = parser.parse_args()
     if args.reel and len(args.video_urls) != 1:
         parser.error("--reel requires exactly one video URL")
+    if args.share_to_feed and not args.reel:
+        parser.error("--share-to-feed only applies with --reel")
     if not args.reel and not 2 <= len(args.video_urls) <= 10:
         parser.error("Instagram carousels require 2 to 10 items")
     if any(not url.startswith("https://") for url in args.video_urls):
@@ -162,7 +176,13 @@ def main() -> int:
     user_id = account_id(token)
     if args.reel:
         print("Creating Reel", flush=True)
-        container = create_reel(user_id, token, args.video_urls[0], args.caption)
+        container = create_reel(
+            user_id,
+            token,
+            args.video_urls[0],
+            args.caption,
+            share_to_feed=args.share_to_feed,
+        )
         wait_until_ready(container, token, args.timeout)
         if not args.publish:
             print(json.dumps({"ready": True, "reel_id": container}, indent=2))
