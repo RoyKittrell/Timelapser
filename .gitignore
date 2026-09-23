@@ -8,6 +8,8 @@ __pycache__/
 # Secrets and local environment
 .env
 .env.*
+*.token
+*.secret
 env/
 
 # Timelapser generated state and logs
@@ -17,6 +19,9 @@ scheduler_state.json
 control/
 director_test_shots/
 instagram_queue/
+instagram_publish_receipt.json
+photos_imports.tsv
+.photos_import.lock
 
 # Timelapse run folders and rendered/transferred media
 20[0-9][0-9][0-9][0-9][0-9][0-9]_*/

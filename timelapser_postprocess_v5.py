@@ -257,6 +257,15 @@ def _queue_instagram_reel(log_path: Path, run_dir: Path, cwd: Path, python: str,
     return _run_step(log_path, "queue_instagram_reel", cmd, cwd)
 
 
+def _publish_instagram(log_path: Path, run_dir: Path, cwd: Path, python: str) -> dict:
+    return _run_step(
+        log_path,
+        "publish_instagram_carousel_and_reel",
+        [python, str(cwd / "instagram_auto_publish.py"), str(run_dir)],
+        cwd,
+    )
+
+
 def run_postprocess(
     run_dir: Path,
     *,
@@ -264,6 +273,7 @@ def run_postprocess(
     smooth_exposure: bool,
     render: bool,
     queue_instagram: bool = True,
+    publish_instagram: bool = True,
     copy_videos_to_mac: bool,
     mac_video_dest: str | None = None,
 ) -> dict:
@@ -282,6 +292,7 @@ def run_postprocess(
         "smooth_exposure": bool(smooth_exposure),
         "render": bool(render),
         "queue_instagram": bool(queue_instagram),
+        "publish_instagram": bool(publish_instagram),
         "copy_videos_to_mac": bool(copy_videos_to_mac),
         "mac_video_dest": dest,
         "steps": [],
@@ -397,6 +408,13 @@ def run_postprocess(
                 summary["status"] = "failed_queue_instagram"
                 return summary
 
+        if publish_instagram and render:
+            step = _publish_instagram(log_path, run_dir, root, python)
+            summary["steps"].append(step)
+            if step["returncode"] != 0:
+                summary["status"] = "failed_publish_instagram"
+                return summary
+
         if copy_videos_to_mac:
             step = _copy_videos_to_mac(log_path, run_dir, dest, root)
             summary["steps"].append(step)
@@ -447,6 +465,7 @@ def main() -> int:
     parser.add_argument("--skip-smoothing", action="store_true")
     parser.add_argument("--skip-render", action="store_true")
     parser.add_argument("--skip-instagram-queue", action="store_true")
+    parser.add_argument("--skip-instagram-publish", action="store_true")
     parser.add_argument("--skip-copy-videos-to-mac", action="store_true")
     parser.add_argument("--mac-video-dest", default=None)
     args = parser.parse_args()
@@ -457,6 +476,7 @@ def main() -> int:
         smooth_exposure=not args.skip_smoothing,
         render=not args.skip_render,
         queue_instagram=not args.skip_instagram_queue,
+        publish_instagram=not args.skip_instagram_publish,
         copy_videos_to_mac=not args.skip_copy_videos_to_mac,
         mac_video_dest=args.mac_video_dest,
     )
