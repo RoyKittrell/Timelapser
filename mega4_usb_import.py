@@ -4,16 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 
-DEVICE = Path("/dev/sda1")
-UHUBCTL = "/usr/sbin/uhubctl"
-HUB_LOCATION = "1-1"
-HUB_PORT = "4"
+CAMERA_SWITCH = "/usr/local/sbin/timelapser-camera-usb"
 
 
 def log(message: str) -> None:
@@ -25,9 +23,26 @@ def run(command: list[str], *, check: bool = True) -> subprocess.CompletedProces
     return subprocess.run(command, text=True, check=check)
 
 
-def mountpoint() -> Path | None:
+def camera_partition() -> Path | None:
     result = subprocess.run(
-        ["findmnt", "-nr", "-o", "TARGET", "-S", str(DEVICE)],
+        ["lsblk", "--json", "-o", "PATH,MODEL,TYPE"],
+        capture_output=True, text=True, check=False,
+    )
+    if result.returncode != 0:
+        return None
+    for disk in json.loads(result.stdout).get("blockdevices", []):
+        if disk.get("type") != "disk" or "E-M5MarkIII" not in (disk.get("model") or ""):
+            continue
+        partitions = [child for child in disk.get("children", []) if child.get("type") == "part"]
+        if len(partitions) != 1:
+            raise RuntimeError(f"Expected one Olympus SD partition, found {len(partitions)}")
+        return Path(partitions[0]["path"])
+    return None
+
+
+def mountpoint(device: Path) -> Path | None:
+    result = subprocess.run(
+        ["findmnt", "-nr", "-o", "TARGET", "-S", str(device)],
         capture_output=True,
         text=True,
         check=False,
@@ -37,43 +52,44 @@ def mountpoint() -> Path | None:
 
 
 def set_port(action: str) -> None:
-    run(["sudo", UHUBCTL, "-l", HUB_LOCATION, "-p", HUB_PORT, "-a", action])
+    run(["sudo", CAMERA_SWITCH, action])
 
 
-def wait_for_device(timeout: float) -> None:
+def wait_for_device(timeout: float) -> Path:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if DEVICE.exists():
-            log(f"Olympus storage appeared as {DEVICE}")
-            return
+        device = camera_partition()
+        if device and device.exists():
+            log(f"Olympus storage appeared as {device}")
+            return device
         log("Waiting for Olympus USB storage...")
         time.sleep(2)
-    raise TimeoutError(f"{DEVICE} did not appear within {timeout:.0f} seconds")
+    raise TimeoutError(f"Olympus storage did not appear within {timeout:.0f} seconds")
 
 
-def ensure_mounted(timeout: float = 30) -> Path:
+def ensure_mounted(device: Path, timeout: float = 30) -> Path:
     deadline = time.monotonic() + timeout
     attempt = 0
     while time.monotonic() < deadline:
-        current = mountpoint()
+        current = mountpoint(device)
         if current is not None:
             log(f"Olympus storage mounted at {current}")
             return current
 
         attempt += 1
-        result = run(["udisksctl", "mount", "-b", str(DEVICE)], check=False)
+        result = run(["udisksctl", "mount", "-b", str(device)], check=False)
         if result.returncode != 0:
             log(f"Mount attempt {attempt} is not ready yet; retrying...")
         time.sleep(2)
 
-    raise TimeoutError(f"Could not mount {DEVICE} within {timeout:.0f} seconds")
+    raise TimeoutError(f"Could not mount {device} within {timeout:.0f} seconds")
 
 
-def cleanup() -> None:
+def cleanup(device: Path | None) -> None:
     try:
         run(["sync"], check=False)
-        if mountpoint() is not None:
-            run(["udisksctl", "unmount", "-b", str(DEVICE)], check=False)
+        if device is not None and mountpoint(device) is not None:
+            run(["udisksctl", "unmount", "-b", str(device)], check=False)
     finally:
         set_port("off")
         log("MEGA4 camera port is off; camera may return to shooting mode")
@@ -93,16 +109,17 @@ def main() -> int:
     importer = root / "timelapser_v6_beta_usb_import.py"
     result_code = 1
     port_enabled = False
+    device = None
     try:
         stage_started = time.monotonic()
         set_port("on")
         port_enabled = True
         log(f"MEGA4 power-on elapsed={time.monotonic() - stage_started:.1f}s")
         stage_started = time.monotonic()
-        wait_for_device(args.device_timeout)
+        device = wait_for_device(args.device_timeout)
         log(f"USB enumeration elapsed={time.monotonic() - stage_started:.1f}s")
         stage_started = time.monotonic()
-        sd_root = ensure_mounted()
+        sd_root = ensure_mounted(device)
         log(f"SD mount elapsed={time.monotonic() - stage_started:.1f}s")
         stage_started = time.monotonic()
         result = run(
@@ -122,7 +139,7 @@ def main() -> int:
     finally:
         if port_enabled:
             cleanup_started = time.monotonic()
-            cleanup()
+            cleanup(device)
             log(f"USB cleanup elapsed={time.monotonic() - cleanup_started:.1f}s")
         log(f"MEGA4 import workflow elapsed={time.monotonic() - workflow_started:.1f}s")
 
