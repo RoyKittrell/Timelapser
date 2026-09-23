@@ -46,6 +46,7 @@ TIMELAPSER_SCRIPT = V5_ROOT / 'timelapser_v5.py'
 CONTROL_DIR = V5_ROOT / 'control'
 STOP_REQUEST_FILE = CONTROL_DIR / 'stop_requested.json'
 DIRECTOR_CONTROL_LOG = CONTROL_DIR / 'director_control.log'
+PREFLIGHT_ALERT_FILE = CONTROL_DIR / 'director_preflight_alert.json'
 TEST_SHOTS_DIR = V5_ROOT / 'director_test_shots'
 CAMERA_INFO_URL = 'http://192.168.0.10/get_caminfo.cgi'
 CAMERA_IMAGE_LIST_URL = 'http://192.168.0.10/get_imglist.cgi'
@@ -1166,6 +1167,47 @@ def scheduler_answer(question: str) -> str:
     return '\n'.join(lines)
 
 
+def run_director_preflight() -> str:
+    try:
+        schedule_mod, missions, _state = load_scheduler_data()
+        scheduler_path = V5_ROOT / 'timelapser_scheduler.py'
+        spec = importlib.util.spec_from_file_location('director_preflight_runner', scheduler_path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f'Cannot load scheduler from {scheduler_path}')
+        scheduler = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = scheduler
+        spec.loader.exec_module(scheduler)
+        tz = ZoneInfo(schedule_mod.TIMEZONE)
+        now = datetime.now(tz)
+        candidates = [m for m in missions if m.enabled and m.end_dt > now]
+        if not candidates:
+            return 'No active or upcoming enabled timelapse was found.'
+        mission = min(candidates, key=lambda item: item.start_dt)
+        ok, checks = scheduler.run_preflight(schedule_mod, mission)
+        alert = scheduler.write_preflight_alert(mission, checks, ok)
+        heading = 'READY' if alert['ready'] else 'ATTENTION NEEDED'
+        lines = [
+            f'Preflight: **{heading}**',
+            f'Next mission: `{mission.key}`',
+            f'Capture: {mission.start_dt.strftime("%Y-%m-%d %H:%M %Z")}–{mission.end_dt.strftime("%H:%M %Z")}',
+            '',
+        ]
+        lines.extend(f'- {line}' for line in checks)
+        if alert['issues']:
+            lines.extend(['', 'Problems detected:', *[f'- {line}' for line in alert['issues']]])
+        return '\n'.join(lines)
+    except Exception as exc:
+        return f'Preflight failed to run: {type(exc).__name__}: {exc}'
+
+
+def read_preflight_alert() -> dict[str, Any]:
+    try:
+        data = json.loads(PREFLIGHT_ALERT_FILE.read_text(encoding='utf-8'))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
 def director_clock_context() -> str:
     try:
         schedule_mod, _missions, _state = load_scheduler_data()
@@ -1308,6 +1350,8 @@ def schedule_future_timelapse(cmd: dict[str, Any]) -> str:
 
 def handle_basic_status_query(text: str) -> str | None:
     t = text.lower()
+    if re.search(r'\b(pre[ -]?flight|readiness|ready for|check before)\b', t):
+        return run_director_preflight()
     if re.search(r'\b(disk|drive|storage|space)\b', t) and re.search(r'\b(left|free|available|percent|%)\b', t):
         return disk_space_answer()
     if re.search(r'\b(shots?|frames?)\b', t) and re.search(r'\b(left|remaining|planned|complete|done)\b', t):
@@ -1572,6 +1616,14 @@ st.sidebar.code(str(run_dir), language=None)
 st.title('📷 Timelapser V5 Director')
 st.caption('Live Wi-Fi timelapse telemetry, image analysis, exposure history and AI reasoning.')
 
+preflight_alert = read_preflight_alert()
+if preflight_alert and not preflight_alert.get('ready', False):
+    issues = preflight_alert.get('issues') or []
+    checked_at = preflight_alert.get('checked_at', 'unknown time')
+    mission_key = preflight_alert.get('mission_key', 'next mission')
+    detail = '\n'.join(f'- {item}' for item in issues) or '- Preflight did not report a ready state.'
+    st.error(f'Preflight alert for {mission_key} ({checked_at})\n\n{detail}')
+
 
 def render_live_panel():
     df = read_telemetry(run_dir)
@@ -1736,7 +1788,7 @@ if chat_key not in st.session_state:
     st.session_state[chat_key] = []
 
 with st.expander('Ask the AI Director', expanded=False):
-    st.caption('Chat over run telemetry, plus constrained commands: start a timelapse now, or stop the current timelapse gracefully.')
+    st.caption('Chat over telemetry, run a preflight for the next mission, start a timelapse now, or stop the current timelapse gracefully.')
 
     for msg in st.session_state[chat_key]:
         with st.chat_message(msg['role']):
@@ -1778,7 +1830,7 @@ Use ONLY the supplied current run state, telemetry, image metrics, logs, errors 
 
 V5 facts:
 - Current clock and timezone are supplied in CURRENT DIRECTOR CLOCK below.
-- wlan1 is the dedicated Olympus Wi-Fi link; wlan0 remains the normal internet/LAN connection.
+- wlan0 is the dedicated Olympus Wi-Fi link; wlan1 remains the normal internet/LAN connection.
 - The camera records RAW+JPEG. ORF remains on SD; JPEG is downloaded to the Pi for analysis.
 - The deterministic Python process alone controls the camera.
 - AI proposes high-level exposure intentions; Python applies deterministic guardrails.

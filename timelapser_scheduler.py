@@ -50,6 +50,7 @@ ROOT = Path(__file__).resolve().parent
 SCHEDULE_FILE = ROOT / "schedule.py"
 STATE_FILE = ROOT / "scheduler_state.json"
 LOG_FILE = ROOT / "scheduler.log"
+PREFLIGHT_ALERT_FILE = ROOT / "control" / "director_preflight_alert.json"
 
 POLL_SECONDS = 20
 MISSION_RETRY_DELAYS_SECONDS = (30, 60, 120)
@@ -65,6 +66,26 @@ def log(msg: str) -> None:
             f.write(line + "\n")
     except Exception:
         pass
+
+
+def write_preflight_alert(m: "Mission", checks: list[str], ok: bool) -> dict[str, Any]:
+    issues = [line for line in checks if line.startswith(("WARN ", "FAIL "))]
+    payload = {
+        "checked_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "mission_key": m.key,
+        "mission_mode": m.mode,
+        "capture_start": m.start_dt.isoformat(),
+        "capture_end": m.end_dt.isoformat(),
+        "ready": bool(ok and not issues),
+        "scheduler_ok": bool(ok),
+        "issues": issues,
+        "checks": checks,
+    }
+    PREFLIGHT_ALERT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    temporary = PREFLIGHT_ALERT_FILE.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(PREFLIGHT_ALERT_FILE)
+    return payload
 
 
 def load_schedule_module():
@@ -339,6 +360,7 @@ def run_mission(mod, m: Mission, state: dict[str, Any], now: datetime) -> int:
     mission_started = time.monotonic()
     log(f"MISSION START {m.key} — planned {m.start_dt.isoformat()} -> {m.end_dt.isoformat()}")
     ok, checks = run_preflight(mod, m)
+    write_preflight_alert(m, checks, ok)
     for line in checks:
         log(f"PREFLIGHT {m.key}: {line}")
 
@@ -515,6 +537,7 @@ def scheduler_tick(mod, missions: list[Mission], state: dict[str, Any]) -> bool:
             last_pf = evstate.get("last_preflight")
             if not last_pf:
                 ok, checks = run_preflight(mod, m)
+                write_preflight_alert(m, checks, ok)
                 for line in checks:
                     log(f"PREFLIGHT {m.key}: {line}")
                 update_event_state(
