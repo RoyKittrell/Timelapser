@@ -97,9 +97,14 @@ st.markdown(
     """
     <style>
     html, body, [data-testid="stAppViewContainer"] {
+        width: 100%;
         max-width: 100vw;
         overflow-x: hidden;
         -webkit-text-size-adjust: 100%;
+    }
+
+    *, *::before, *::after {
+        box-sizing: border-box;
     }
 
     [data-testid="stMetricValue"] {
@@ -125,8 +130,13 @@ st.markdown(
         word-break: break-word;
     }
 
-    @media (max-width: 600px) {
+    @media (max-width: 768px) {
+        [data-testid="stAppViewContainer"],
+        [data-testid="stMain"],
+        [data-testid="stMainBlockContainer"],
+        section.main,
         .block-container {
+            min-width: 0 !important;
             max-width: 100vw;
             width: 100%;
             padding-left: 0.75rem;
@@ -150,17 +160,24 @@ st.markdown(
 
         [data-testid="column"] {
             width: 100% !important;
+            max-width: 100% !important;
             flex: 1 1 100% !important;
             min-width: 0 !important;
         }
 
         [data-testid="stHorizontalBlock"] {
+            display: flex !important;
+            width: 100% !important;
+            max-width: 100% !important;
+            min-width: 0 !important;
             flex-wrap: wrap;
             gap: 0.35rem;
         }
 
         [data-testid="stMetric"] {
-            min-width: 0;
+            width: 100% !important;
+            max-width: 100% !important;
+            min-width: 0 !important;
         }
 
         [data-testid="stMetricValue"] {
@@ -169,13 +186,24 @@ st.markdown(
 
         [data-testid="stForm"],
         [data-testid="stExpander"],
-        [data-testid="stAlertContainer"] {
-            max-width: 100%;
-            min-width: 0;
+        [data-testid="stAlertContainer"],
+        [data-testid="stImage"],
+        [data-testid="stPlotlyChart"],
+        [data-testid="stVegaLiteChart"],
+        [data-testid="stDataFrame"] {
+            width: 100% !important;
+            max-width: 100% !important;
+            min-width: 0 !important;
+            overflow-x: auto;
         }
 
         button, input, textarea, select {
             max-width: 100%;
+        }
+
+        p, pre, code, span, label {
+            max-width: 100%;
+            overflow-wrap: anywhere;
         }
     }
     </style>
