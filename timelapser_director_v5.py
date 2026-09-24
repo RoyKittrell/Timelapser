@@ -49,6 +49,7 @@ DIRECTOR_CONTROL_LOG = CONTROL_DIR / 'director_control.log'
 PREFLIGHT_ALERT_FILE = CONTROL_DIR / 'director_preflight_alert.json'
 TEST_SHOTS_DIR = V5_ROOT / 'director_test_shots'
 REBOOT_HELPER = Path('/usr/local/sbin/timelapser-reboot')
+CAMERA_WIFI_HELPER = Path('/usr/local/sbin/timelapser-camera-wifi')
 CAMERA_INFO_URL = 'http://192.168.0.10/get_caminfo.cgi'
 CAMERA_IMAGE_LIST_URL = 'http://192.168.0.10/get_imglist.cgi'
 CAMERA_SD_CARD_TOTAL_BYTES = 64 * 1024 ** 3
@@ -684,6 +685,9 @@ def parse_schedule_command(text: str) -> dict[str, Any] | None:
 
 def parse_operator_command(text: str) -> dict[str, Any] | None:
     t = text.lower().strip()
+    if re.search(r'\b(connect|join|reconnect)\b', t) and re.search(r'\b(camera|olympus)\b', t):
+        return {'action': 'connect_camera_wifi'}
+
     if re.search(r'\b(reboot|restart)\b', t) and re.search(r'\b(pi|raspberry|system|machine)\b', t):
         return {
             'action': 'reboot',
@@ -1548,6 +1552,65 @@ def request_pi_reboot(*, force: bool, reason: str) -> str:
     return f'Reboot was not scheduled (exit {cp.returncode}). {output or "No diagnostic output."}'
 
 
+def request_camera_wifi_connect() -> str:
+    command = [
+        '/usr/bin/timeout', '30', 'sudo', '-n',
+        str(CAMERA_WIFI_HELPER), 'connect',
+    ]
+    try:
+        cp = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=35,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        cp = None
+    except OSError as exc:
+        return f'I could not invoke the camera Wi-Fi helper: {type(exc).__name__}: {exc}'
+
+    try:
+        state_cp = subprocess.run(
+            ['nmcli', '-t', '-f', 'GENERAL.STATE,GENERAL.CONNECTION', 'device', 'show', 'wlan0'],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+        state_text = state_cp.stdout.strip()
+    except Exception:
+        state_text = ''
+
+    api_ok, api_detail = camera_api_preflight(timeout=4.0)
+    result_code = cp.returncode if cp is not None else 124
+    output = ((cp.stdout or cp.stderr) if cp is not None else 'helper timed out').strip()
+    append_control_log({
+        'action': 'connect_camera_wifi',
+        'returncode': result_code,
+        'network_state': state_text,
+        'camera_api_ok': api_ok,
+        'camera_api': api_detail,
+        'output': output,
+    })
+
+    if api_ok:
+        return (
+            'Connected: `wlan0` is on the Olympus Wi-Fi and the camera API is reachable. '
+            'The home network on `wlan1` was left untouched.'
+        )
+    if 'connecting' in state_text.lower() or result_code == 124:
+        return (
+            'I asked the Pi to connect to the Olympus Wi-Fi. NetworkManager is still trying, '
+            'but the camera API is not reachable yet. Leave the camera Wi-Fi screen open and try again shortly.'
+        )
+    return (
+        'The Pi tried to connect, but the Olympus connection did not come up. '
+        f'Network state: `{state_text or "unknown"}`. Camera check: {api_detail}. '
+        'Confirm that the camera Wi-Fi screen is open and no phone is connected to it.'
+    )
+
+
 def handle_operator_command(text: str, current_run_dir: Path) -> str | None:
     cmd = parse_operator_command(text)
     if cmd is None:
@@ -1560,6 +1623,8 @@ def handle_operator_command(text: str, current_run_dir: Path) -> str | None:
         return request_timelapse_stop(cmd['reason'])
     if cmd['action'] == 'reboot':
         return request_pi_reboot(force=cmd['force'], reason=cmd['reason'])
+    if cmd['action'] == 'connect_camera_wifi':
+        return request_camera_wifi_connect()
     if cmd['action'] == 'schedule_future':
         return schedule_future_timelapse(cmd)
     if cmd['action'] == 'start_now':
@@ -1925,6 +1990,7 @@ V5 facts:
 - Operator preference: after about 1/4s, V5 should prefer raising ISO before making shutter longer unless ISO is already near its limit.
 - Median brightness, highlights_pct and shadows_pct come from each downloaded JPEG.
 - This Director may start an ad-hoc validated timelapser_v5.py run or request graceful stop through a control file.
+- The Director may activate the saved Olympus Wi-Fi profile on wlan0 through a fixed privileged helper, then verify the camera API without disturbing wlan1.
 - The Director may request a guarded Raspberry Pi reboot through a fixed privileged helper. It refuses while capture or postprocessing is active unless the operator explicitly forces it.
 - The Director still has no direct camera authority and never sends Olympus camera commands itself.
 
