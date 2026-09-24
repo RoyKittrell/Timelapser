@@ -1918,7 +1918,7 @@ st.sidebar.caption(f'Auto-refresh: {REFRESH_SECONDS}s')
 st.sidebar.code(str(run_dir), language=None)
 show_latest_frame = st.sidebar.toggle(
     'Show live latest frame',
-    value=False,
+    value=True,
     help='Optional changing thumbnail view. The fixed opening test shot remains visible when available.',
 )
 
