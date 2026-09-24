@@ -48,8 +48,11 @@ STOP_REQUEST_FILE = CONTROL_DIR / 'stop_requested.json'
 DIRECTOR_CONTROL_LOG = CONTROL_DIR / 'director_control.log'
 PREFLIGHT_ALERT_FILE = CONTROL_DIR / 'director_preflight_alert.json'
 TEST_SHOTS_DIR = V5_ROOT / 'director_test_shots'
+TEST_SHOT_RETENTION = 12
 REBOOT_HELPER = Path('/usr/local/sbin/timelapser-reboot')
 CAMERA_WIFI_HELPER = Path('/usr/local/sbin/timelapser-camera-wifi')
+HOME_WIFI_PROFILE = 'netplan-wlan0-_A29-01'
+CAMERA_WIFI_PROFILE = 'E-M5MKIII-P-BJ8A00203'
 CAMERA_INFO_URL = 'http://192.168.0.10/get_caminfo.cgi'
 CAMERA_IMAGE_LIST_URL = 'http://192.168.0.10/get_imglist.cgi'
 CAMERA_SD_CARD_TOTAL_BYTES = 64 * 1024 ** 3
@@ -281,10 +284,6 @@ def latest_jpeg(run_dir: Path) -> Path | None:
     return scout if scout.exists() else None
 
 
-def run_test_shots_dir(run_dir: Path) -> Path:
-    return run_dir / 'director_test_shots'
-
-
 def _path_is_inside(path: Path, parent: Path) -> bool:
     try:
         path.resolve().relative_to(parent.resolve())
@@ -293,48 +292,36 @@ def _path_is_inside(path: Path, parent: Path) -> bool:
         return False
 
 
-def latest_test_shot(run_dir: Path | None = None) -> Path | None:
-    base = run_test_shots_dir(run_dir) if run_dir is not None else TEST_SHOTS_DIR
-    if not base.exists():
+def latest_test_shot() -> Path | None:
+    if not TEST_SHOTS_DIR.exists():
         return None
-    imgs = list(base.glob('*/final_full.jpg'))
+    imgs = list(TEST_SHOTS_DIR.glob('*/final_full.jpg'))
     return max(imgs, key=lambda p: p.stat().st_mtime) if imgs else None
 
 
-def display_test_shot_for_run(run_dir: Path) -> Path | None:
+def display_test_shot() -> Path | None:
     session_path = st.session_state.get('latest_test_shot_path')
     if session_path:
         candidate = Path(session_path)
-        if candidate.exists() and _path_is_inside(candidate, run_test_shots_dir(run_dir)):
+        if candidate.exists() and _path_is_inside(candidate, TEST_SHOTS_DIR):
             return candidate
-    return latest_test_shot(run_dir)
+    return latest_test_shot()
 
 
-def cleanup_test_shots_if_frames_deleted(run_dir: Path) -> None:
-    test_dir = run_test_shots_dir(run_dir)
-    if not test_dir.exists() or not (run_dir / 'run_summary.json').exists():
+def prune_old_test_shots() -> None:
+    if not TEST_SHOTS_DIR.exists():
         return
-
-    frame_dirs = [
-        run_dir / 'frames_jpeg',
-        run_dir / 'frames_full_jpeg',
-        run_dir / 'frames_smoothed_luma_v2',
-    ]
-    if any(count_jpegs(folder) > 0 for folder in frame_dirs):
-        return
-
     try:
-        shutil.rmtree(test_dir)
-        if st.session_state.get('latest_test_shot_path') and _path_is_inside(
-            Path(st.session_state['latest_test_shot_path']),
-            test_dir,
-        ):
-            st.session_state.pop('latest_test_shot_path', None)
-            st.session_state.pop('hidden_test_shot_path', None)
+        shot_dirs = sorted(
+            (path for path in TEST_SHOTS_DIR.iterdir() if path.is_dir()),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        for old_dir in shot_dirs[TEST_SHOT_RETENTION:]:
+            shutil.rmtree(old_dir)
     except Exception as exc:
         append_control_log({
-            'action': 'test_shot_cleanup_failed',
-            'run_dir': str(run_dir),
+            'action': 'test_shot_prune_failed',
             'error_type': type(exc).__name__,
             'error': str(exc),
         })
@@ -415,13 +402,12 @@ def show_test_shot(run_dir: Path | None = None) -> str:
         return (
             "I could not take a test shot because the Olympus camera API is not reachable.\n\n"
             f"Camera check: {preflight}\n\n"
-            "The camera Wi-Fi may be off, the Pi may not be joined to the camera SSID on wlan1, "
+            "The camera Wi-Fi may be off, the assigned adapter may not be joined to the camera SSID, "
             "or the camera may still be waking up."
         )
 
     stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    shot_base = run_test_shots_dir(run_dir) if run_dir is not None else TEST_SHOTS_DIR
-    shot_dir = shot_base / stamp
+    shot_dir = TEST_SHOTS_DIR / stamp
     shot_dir.mkdir(parents=True, exist_ok=True)
     logger = RunLogger(shot_dir)
     camera = WifiCameraController(logger)
@@ -501,6 +487,8 @@ def show_test_shot(run_dir: Path | None = None) -> str:
         )
         append_control_log({'action': 'test_shot_completed', **summary})
         st.session_state['latest_test_shot_path'] = str(final_full)
+        st.session_state.pop('hidden_test_shot_path', None)
+        prune_old_test_shots()
         return (
             "Test shot complete.\n\n"
             "Displayed image: final post-adjustment full JPEG\n"
@@ -1430,7 +1418,7 @@ def start_timelapse_now(cmd: dict[str, Any]) -> str:
         return (
             "I did not start the timelapse because the Olympus camera API is not reachable.\n\n"
             f"Camera check: {preflight}\n\n"
-            "The camera Wi-Fi may be off, the Pi may not be joined to the camera SSID on wlan1, "
+            "The camera Wi-Fi may be off, the assigned adapter may not be joined to the camera SSID, "
             "or the camera may still be waking up."
         )
 
@@ -1570,25 +1558,21 @@ def request_camera_wifi_connect() -> str:
     except OSError as exc:
         return f'I could not invoke the camera Wi-Fi helper: {type(exc).__name__}: {exc}'
 
-    camera_interface = 'wlan0'
+    camera_interface = ''
     try:
-        interface_cp = subprocess.run(
-            ['nmcli', '-g', 'connection.interface-name', 'connection', 'show', 'E-M5MKIII-P-BJ8A00203'],
+        active_cp = subprocess.run(
+            ['nmcli', '-t', '-f', 'NAME,DEVICE', 'connection', 'show', '--active'],
             capture_output=True,
             text=True,
             timeout=3,
             check=False,
         )
-        if interface_cp.returncode == 0 and interface_cp.stdout.strip():
-            camera_interface = interface_cp.stdout.strip()
-        state_cp = subprocess.run(
-            ['nmcli', '-t', '-f', 'GENERAL.STATE,GENERAL.CONNECTION', 'device', 'show', camera_interface],
-            capture_output=True,
-            text=True,
-            timeout=3,
-            check=False,
-        )
-        state_text = state_cp.stdout.strip()
+        for line in active_cp.stdout.splitlines():
+            name, _, device = line.partition(':')
+            if name == CAMERA_WIFI_PROFILE and device:
+                camera_interface = device
+                break
+        state_text = f'connected on {camera_interface}' if camera_interface else 'disconnected'
     except Exception:
         state_text = ''
 
@@ -1606,8 +1590,8 @@ def request_camera_wifi_connect() -> str:
 
     if api_ok:
         return (
-            f'Connected: `{camera_interface}` is on the Olympus Wi-Fi and the camera API is reachable. '
-            'The home network on `wlan1` was left untouched.'
+            f'Connected: `{camera_interface or "the assigned adapter"}` is on the Olympus Wi-Fi and the camera API is reachable. '
+            'The separately assigned home-network adapter was left untouched.'
         )
     if 'connecting' in state_text.lower() or result_code == 124:
         return (
@@ -1642,27 +1626,25 @@ def handle_operator_command(text: str, current_run_dir: Path) -> str | None:
     return None
 
 
-def wlan1_status() -> tuple[str, str]:
+def home_wifi_status() -> tuple[str, str]:
     try:
         cp = subprocess.run(
-            ['nmcli', '-t', '-f', 'DEVICE,TYPE,STATE,CONNECTION', 'device', 'status'],
+            ['nmcli', '-t', '-f', 'NAME,DEVICE', 'connection', 'show', '--active'],
             capture_output=True,
             text=True,
             timeout=2,
             check=False,
         )
         for line in cp.stdout.splitlines():
-            parts = line.split(':', 3)
-            if parts and parts[0] == 'wlan1':
-                state = parts[2] if len(parts) > 2 else 'unknown'
-                connection = parts[3] if len(parts) > 3 else ''
-                return state, connection
+            name, _, device = line.partition(':')
+            if name == HOME_WIFI_PROFILE and device:
+                return 'connected', device
     except Exception:
         pass
-    return 'unknown', ''
+    return 'disconnected', ''
 
 
-def wlan1_indicator(state: str, connection: str) -> tuple[str, str]:
+def wifi_indicator(state: str, connection: str) -> tuple[str, str]:
     normalized = state.lower().strip()
     if normalized == 'connected':
         return '🟢', connection or 'connected'
@@ -1747,7 +1729,7 @@ def collect_context(run_dir: Path) -> str:
     payload = {
         'run_directory': str(run_dir),
         'run_status': run_status(run_dir),
-        'wlan1': wlan1_status(),
+        'home_wifi': home_wifi_status(),
         'capture_interval_seconds': parse_interval(run_dir),
         'telemetry_tail': telemetry_tail,
         'recent_events': read_jsonl_tail(run_dir / 'events.jsonl', 60),
@@ -1792,8 +1774,8 @@ def render_live_panel():
     latest = df.iloc[-1].to_dict() if not df.empty else {}
     status = run_status(run_dir)
     mode = run_mode(run_dir)
-    wifi_state, wifi_connection = wlan1_status()
-    wifi_dot, _wifi_detail = wlan1_indicator(wifi_state, wifi_connection)
+    wifi_state, wifi_connection = home_wifi_status()
+    wifi_dot, _wifi_detail = wifi_indicator(wifi_state, wifi_connection)
     next_label, next_detail = next_scheduled_timelapse()
     interval = parse_interval(run_dir)
     ai_decision = latest_ai_decision(run_dir)
@@ -1829,14 +1811,15 @@ def render_live_panel():
     top[4].metric('Median brightness', f'{float(median):.3f}' if median is not None else '—')
 
     second = st.columns(5)
-    second[0].metric('wlan1', wifi_dot)
+    second[0].metric('Home Wi-Fi', wifi_dot)
+    second[0].caption(wifi_connection or HOME_WIFI_PROFILE)
     second[1].metric('Target interval', f'{interval:.1f}s' if interval is not None else '—')
     second[2].metric('Last cycle', format_seconds(cycle))
     second[3].metric('Worst cycle', format_seconds(worst_cycle))
     second[4].metric('Logged errors', len(errors))
 
-    cleanup_test_shots_if_frames_deleted(run_dir)
-    test_image_path = display_test_shot_for_run(run_dir)
+    prune_old_test_shots()
+    test_image_path = display_test_shot()
     hidden_test_shot = st.session_state.get('hidden_test_shot_path')
     if test_image_path and test_image_path.exists() and str(test_image_path) != hidden_test_shot:
         test_summary = latest_test_shot_summary(test_image_path)
@@ -1992,7 +1975,7 @@ Use ONLY the supplied current run state, telemetry, image metrics, logs, errors 
 
 V5 facts:
 - Current clock and timezone are supplied in CURRENT DIRECTOR CLOCK below.
-- The interface assigned to the saved Olympus profile is the dedicated camera link; wlan1 remains the normal internet/LAN connection.
+- Wi-Fi roles follow saved NetworkManager profiles bound to adapter hardware addresses; Linux interface numbers may change after USB devices move.
 - The camera records RAW+JPEG. ORF remains on SD; JPEG is downloaded to the Pi for analysis.
 - The deterministic Python process alone controls the camera.
 - AI proposes high-level exposure intentions; Python applies deterministic guardrails.
@@ -2000,7 +1983,7 @@ V5 facts:
 - Operator preference: after about 1/4s, V5 should prefer raising ISO before making shutter longer unless ISO is already near its limit.
 - Median brightness, highlights_pct and shadows_pct come from each downloaded JPEG.
 - This Director may start an ad-hoc validated timelapser_v5.py run or request graceful stop through a control file.
-- The Director may activate the saved Olympus Wi-Fi profile on its assigned interface through a fixed privileged helper, then verify the camera API without disturbing wlan1.
+- The Director may activate the saved Olympus Wi-Fi profile through a fixed privileged helper, then verify the camera API without disturbing the separate home-network adapter.
 - The Director may request a guarded Raspberry Pi reboot through a fixed privileged helper. It refuses while capture or postprocessing is active unless the operator explicitly forces it.
 - The Director still has no direct camera authority and never sends Olympus camera commands itself.
 

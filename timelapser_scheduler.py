@@ -55,6 +55,8 @@ PREFLIGHT_ALERT_FILE = ROOT / "control" / "director_preflight_alert.json"
 POLL_SECONDS = 20
 MISSION_RETRY_DELAYS_SECONDS = (30, 60, 120)
 MAX_MISSION_RETRIES = len(MISSION_RETRY_DELAYS_SECONDS)
+HOME_WIFI_PROFILE = "netplan-wlan0-_A29-01"
+CAMERA_WIFI_PROFILE = "E-M5MKIII-P-BJ8A00203"
 
 
 def log(msg: str) -> None:
@@ -274,39 +276,35 @@ def run_preflight(mod, m: Mission) -> tuple[bool, list[str]]:
     except Exception as exc:
         notes.append(f"WARN disk check failed: {exc}")
 
-    # The external adapter (wlan1) owns the home/internet connection. The
-    # kernel interface path is available even on minimal images without iw.
-    if Path("/sys/class/net/wlan1").exists():
-        notes.append("OK wlan1 exists")
-    else:
-        ok = False
-        notes.append("FAIL wlan1 not found")
-
-    # NetworkManager requires privileged activation from this headless service.
-    # A narrowly scoped sudoers rule allows only this fixed-profile helper.
+    # Follow NetworkManager profiles instead of volatile wlan numbers. Each
+    # profile is bound to the intended adapter's permanent MAC address.
     camera_wifi_helper = Path("/usr/local/sbin/timelapser-camera-wifi")
-    camera_profile = "E-M5MKIII-P-BJ8A00203"
-    camera_interface = "wlan0"
+    camera_interface = ""
     camera_connected = False
+    home_interface = ""
     if shutil.which("nmcli"):
         try:
-            interface = subprocess.run(
-                ["nmcli", "-g", "connection.interface-name", "connection", "show", camera_profile],
+            active = subprocess.run(
+                ["nmcli", "-t", "-f", "NAME,DEVICE", "connection", "show", "--active"],
                 capture_output=True,
                 text=True,
                 timeout=5,
             )
-            if interface.returncode == 0 and interface.stdout.strip():
-                camera_interface = interface.stdout.strip()
-            state = subprocess.run(
-                ["nmcli", "-t", "-f", "GENERAL.STATE,GENERAL.CONNECTION", "device", "show", camera_interface],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            camera_connected = state.returncode == 0 and camera_profile in state.stdout and "100 (connected)" in state.stdout
+            for line in active.stdout.splitlines():
+                name, _, device = line.partition(":")
+                if name == HOME_WIFI_PROFILE and device:
+                    home_interface = device
+                if name == CAMERA_WIFI_PROFILE and device:
+                    camera_interface = device
+                    camera_connected = True
         except (OSError, subprocess.TimeoutExpired):
             camera_connected = False
+
+    if home_interface:
+        notes.append(f"OK home Wi-Fi connected on {home_interface}")
+    else:
+        ok = False
+        notes.append(f"FAIL home Wi-Fi profile is not active: {HOME_WIFI_PROFILE}")
 
     if camera_connected:
         notes.append(f"OK Olympus Wi-Fi connected on {camera_interface}")
@@ -319,6 +317,17 @@ def run_preflight(mod, m: Mission) -> tuple[bool, list[str]]:
                 timeout=15,
             )
             if result.returncode == 0:
+                active = subprocess.run(
+                    ["nmcli", "-t", "-f", "NAME,DEVICE", "connection", "show", "--active"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                for line in active.stdout.splitlines():
+                    name, _, device = line.partition(":")
+                    if name == CAMERA_WIFI_PROFILE and device:
+                        camera_interface = device
+                        break
                 notes.append(f"OK Olympus Wi-Fi connected on {camera_interface}")
             else:
                 ok = False
