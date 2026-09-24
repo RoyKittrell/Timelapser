@@ -48,6 +48,7 @@ STOP_REQUEST_FILE = CONTROL_DIR / 'stop_requested.json'
 DIRECTOR_CONTROL_LOG = CONTROL_DIR / 'director_control.log'
 PREFLIGHT_ALERT_FILE = CONTROL_DIR / 'director_preflight_alert.json'
 TEST_SHOTS_DIR = V5_ROOT / 'director_test_shots'
+REBOOT_HELPER = Path('/usr/local/sbin/timelapser-reboot')
 CAMERA_INFO_URL = 'http://192.168.0.10/get_caminfo.cgi'
 CAMERA_IMAGE_LIST_URL = 'http://192.168.0.10/get_imglist.cgi'
 CAMERA_SD_CARD_TOTAL_BYTES = 64 * 1024 ** 3
@@ -683,6 +684,13 @@ def parse_schedule_command(text: str) -> dict[str, Any] | None:
 
 def parse_operator_command(text: str) -> dict[str, Any] | None:
     t = text.lower().strip()
+    if re.search(r'\b(reboot|restart)\b', t) and re.search(r'\b(pi|raspberry|system|machine)\b', t):
+        return {
+            'action': 'reboot',
+            'force': bool(re.search(r'\b(force|anyway|even if busy)\b', t)),
+            'reason': text.strip(),
+        }
+
     if re.search(r'\b(show|take|make|display|get)\b', t) and re.search(r'\b(test|scout)\s+shot\b', t):
         return {'action': 'test_shot'}
 
@@ -1502,6 +1510,44 @@ def request_timelapse_stop(reason: str) -> str:
     )
 
 
+def request_pi_reboot(*, force: bool, reason: str) -> str:
+    command = ['sudo', '-n', str(REBOOT_HELPER), 'force' if force else 'request']
+    try:
+        cp = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=8,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return 'The reboot helper did not respond in time, so I cannot confirm a reboot was scheduled.'
+    except OSError as exc:
+        return f'I could not invoke the reboot helper: {type(exc).__name__}: {exc}'
+
+    output = (cp.stdout or cp.stderr or '').strip()
+    append_control_log({
+        'action': 'reboot_requested',
+        'force': force,
+        'reason': reason,
+        'returncode': cp.returncode,
+        'output': output,
+    })
+    if cp.returncode == 0:
+        return (
+            'Raspberry Pi reboot scheduled. The dashboard will disappear briefly and '
+            'return automatically after the Pi, Tailscale, and Director service start.'
+        )
+    if cp.returncode == 3:
+        return (
+            'I refused to reboot because a capture or postprocessing job is active. '
+            'Let it finish, or explicitly say "force reboot the Raspberry Pi" if interruption is intentional.'
+        )
+    if cp.returncode == 4:
+        return 'A reboot is already scheduled.'
+    return f'Reboot was not scheduled (exit {cp.returncode}). {output or "No diagnostic output."}'
+
+
 def handle_operator_command(text: str, current_run_dir: Path) -> str | None:
     cmd = parse_operator_command(text)
     if cmd is None:
@@ -1512,6 +1558,8 @@ def handle_operator_command(text: str, current_run_dir: Path) -> str | None:
         return show_test_shot(current_run_dir)
     if cmd['action'] == 'stop':
         return request_timelapse_stop(cmd['reason'])
+    if cmd['action'] == 'reboot':
+        return request_pi_reboot(force=cmd['force'], reason=cmd['reason'])
     if cmd['action'] == 'schedule_future':
         return schedule_future_timelapse(cmd)
     if cmd['action'] == 'start_now':
@@ -1827,7 +1875,7 @@ if chat_key not in st.session_state:
     st.session_state[chat_key] = []
 
 with st.expander('Ask the AI Director', expanded=False):
-    st.caption('Chat over telemetry, run a preflight for the next mission, start a timelapse now, or stop the current timelapse gracefully.')
+    st.caption('Chat over telemetry, run a preflight, control timelapses, or safely reboot the Raspberry Pi.')
 
     for msg in st.session_state[chat_key]:
         with st.chat_message(msg['role']):
@@ -1877,6 +1925,7 @@ V5 facts:
 - Operator preference: after about 1/4s, V5 should prefer raising ISO before making shutter longer unless ISO is already near its limit.
 - Median brightness, highlights_pct and shadows_pct come from each downloaded JPEG.
 - This Director may start an ad-hoc validated timelapser_v5.py run or request graceful stop through a control file.
+- The Director may request a guarded Raspberry Pi reboot through a fixed privileged helper. It refuses while capture or postprocessing is active unless the operator explicitly forces it.
 - The Director still has no direct camera authority and never sends Olympus camera commands itself.
 
 Be concise but technically useful. If evidence is missing, say so.'''
