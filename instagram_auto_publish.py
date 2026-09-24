@@ -7,10 +7,12 @@ import argparse
 import json
 import os
 import re
+import socket
 import shutil
 import subprocess
 import tempfile
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime
 from pathlib import Path
@@ -136,6 +138,15 @@ class TemporaryHost:
                             last_error = RuntimeError(
                                 f"Temporary host returned HTTP {response.status}: {url}"
                             )
+                    except urllib.error.URLError as exc:
+                        if isinstance(exc.reason, socket.gaierror):
+                            print(
+                                "Local DNS cannot resolve the fresh trycloudflare hostname; "
+                                "continuing because Meta resolves the public media URL independently.",
+                                flush=True,
+                            )
+                            break
+                        last_error = exc
                     except Exception as exc:
                         last_error = exc
                     if self.tunnel.poll() is not None:
