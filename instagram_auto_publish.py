@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime
 from pathlib import Path
@@ -124,6 +125,30 @@ class TemporaryHost:
             time.sleep(1)
         if not self.base_url:
             raise TimeoutError("Timed out waiting for temporary public URL")
+        hostname = urllib.parse.urlparse(self.base_url).hostname
+        dns_deadline = time.monotonic() + 120
+        dns_error: Exception | None = None
+        while hostname and time.monotonic() < dns_deadline:
+            try:
+                query = urllib.parse.urlencode({"name": hostname, "type": "A"})
+                request_obj = urllib.request.Request(
+                    f"https://cloudflare-dns.com/dns-query?{query}",
+                    headers={"accept": "application/dns-json"},
+                )
+                with urllib.request.urlopen(request_obj, timeout=15) as response:
+                    result = json.load(response)
+                if result.get("Status") == 0 and result.get("Answer"):
+                    print(f"Public DNS is ready for {hostname}.", flush=True)
+                    break
+                dns_error = RuntimeError(f"DNS response had no answers: {result}")
+            except Exception as exc:
+                dns_error = exc
+            time.sleep(2)
+        else:
+            self.__exit__()
+            raise TimeoutError(
+                f"Cloudflare public DNS did not publish {hostname} within 120 seconds: {dns_error}"
+            )
         urls = {name: f"{self.base_url}/{name}" for name in self.files}
         try:
             for url in urls.values():
