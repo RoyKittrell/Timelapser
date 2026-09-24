@@ -46,6 +46,16 @@ class CameraUsbPortTests(unittest.TestCase):
         )
         self.assertEqual(mega4_usb_import.camera_partition(), Path("/dev/sdb1"))
 
+    @patch("mega4_usb_import.subprocess.run")
+    def test_camera_partition_waits_for_partition_table(self, run):
+        run.return_value = Mock(
+            returncode=0,
+            stdout=json.dumps({"blockdevices": [
+                {"path": "/dev/sdc", "model": "E-M5MarkIII", "type": "disk"},
+            ]}),
+        )
+        self.assertIsNone(mega4_usb_import.camera_partition())
+
 
 if __name__ == "__main__":
     unittest.main()

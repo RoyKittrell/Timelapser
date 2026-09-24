@@ -34,7 +34,11 @@ def camera_partition() -> Path | None:
         if disk.get("type") != "disk" or "E-M5MarkIII" not in (disk.get("model") or ""):
             continue
         partitions = [child for child in disk.get("children", []) if child.get("type") == "part"]
-        if len(partitions) != 1:
+        # The disk appears before the kernel finishes reading its partition
+        # table. Zero children is a normal transient state for the retry loop.
+        if not partitions:
+            return None
+        if len(partitions) > 1:
             raise RuntimeError(f"Expected one Olympus SD partition, found {len(partitions)}")
         return Path(partitions[0]["path"])
     return None
