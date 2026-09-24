@@ -312,12 +312,15 @@ def run_preflight(mod, m: Mission) -> tuple[bool, list[str]]:
             if result.returncode == 0:
                 notes.append("OK Olympus Wi-Fi connected on wlan0")
             else:
+                ok = False
                 detail = (result.stderr or result.stdout).strip().splitlines()
-                notes.append(f"WARN Olympus Wi-Fi activation failed: {detail[-1] if detail else result.returncode}")
+                notes.append(f"FAIL Olympus Wi-Fi activation failed: {detail[-1] if detail else result.returncode}")
         except Exception as exc:
-            notes.append(f"WARN Olympus Wi-Fi activation failed: {type(exc).__name__}: {exc}")
+            ok = False
+            notes.append(f"FAIL Olympus Wi-Fi activation failed: {type(exc).__name__}: {exc}")
     else:
-        notes.append("WARN camera Wi-Fi helper is not installed")
+        ok = False
+        notes.append("FAIL camera Wi-Fi helper is not installed")
 
     # Olympus-safe informational reachability check.  The camera root URL is
     # not a normal web page and can misleadingly fail; get_caminfo.cgi is a
@@ -329,7 +332,8 @@ def run_preflight(mod, m: Mission) -> tuple[bool, list[str]]:
             payload = resp.read(256)
             notes.append(f"OK Olympus camera API reachable ({resp.status}, {len(payload)}+ bytes)")
     except Exception as exc:
-        notes.append(f"WARN Olympus camera API not currently reachable: {type(exc).__name__}")
+        ok = False
+        notes.append(f"FAIL Olympus camera API not currently reachable: {type(exc).__name__}")
 
     return ok, notes
 
