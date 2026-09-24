@@ -1811,7 +1811,7 @@ def shutter_history_chart(plot: pd.DataFrame) -> alt.Chart | None:
     frame['shutter_label'] = frame['shutter_seconds'].map(format_shutter)
     x_type = 'temporal' if pd.api.types.is_datetime64_any_dtype(frame[x_field]) else 'quantitative'
     axis = alt.Axis(
-        title='Shutter speed',
+        title=None,
         labelExpr="datum.value < 1 ? '1/' + format(1 / datum.value, '.0f') : format(datum.value, '.2~f') + 's'",
         grid=True,
     )
