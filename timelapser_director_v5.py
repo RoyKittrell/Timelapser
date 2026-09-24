@@ -986,6 +986,15 @@ def render_postprocess_status(run_dir: Path) -> None:
     publish_enabled = bool(live.get('publish_instagram'))
     stages = [item for item in POSTPROCESS_STAGES if publish_enabled or item[0] != 'publish_instagram_carousel_and_reel']
     labels = dict(POSTPROCESS_STAGES)
+    stage_completed = 0
+    stage_total = 0
+    if current in {'validate_and_repair_jpegs', 'validate_smoothed_jpegs'}:
+        validation_matches = re.findall(
+            r'JPEG validation progress:\s*(\d+)/(\d+)',
+            tail_text(run_dir / 'postprocess_workflow.log', 30000),
+        )
+        if validation_matches:
+            stage_completed, stage_total = map(int, validation_matches[-1])
 
     now = datetime.now().astimezone()
     started = pd.to_datetime(live.get('started_at'), errors='coerce')
@@ -1019,13 +1028,17 @@ def render_postprocess_status(run_dir: Path) -> None:
     st.markdown('### Post-run workflow')
     cols = st.columns(4)
     cols[0].metric('Status', status.replace('_', ' ').title())
-    cols[1].metric('Current stage', labels.get(current, current.replace('_', ' ').title()) or 'Finishing')
+    current_label = labels.get(current, current.replace('_', ' ').title()) or 'Finishing'
+    if stage_total:
+        current_label = f'{current_label} ({stage_completed}/{stage_total})'
+    cols[1].metric('Current stage', current_label)
     cols[2].metric('Elapsed', format_countdown(elapsed) if elapsed is not None else '—')
     cols[3].metric('Estimated IG upload', format_countdown(eta) if eta is not None else ('Complete' if status == 'complete' and publish_enabled else '—'))
 
     done_count = sum(1 for name, _label in stages if name in completed)
+    stage_fraction = (stage_completed / stage_total) if stage_total else 0.0
     if stages:
-        st.progress(min(1.0, done_count / len(stages)))
+        st.progress(min(1.0, (done_count + stage_fraction) / len(stages)))
     stage_text = []
     for name, label in stages:
         marker = '✓' if name in completed else '▶' if name == current else '·'
