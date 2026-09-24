@@ -800,7 +800,15 @@ def active_fullres_download_process(run_dir: Path) -> bool:
         return False
 
     run_text = str(run_dir)
-    return any('download_run_fullres.py' in line and run_text in line for line in cp.stdout.splitlines())
+    download_processes = (
+        'download_run_fullres.py',
+        'mega4_usb_import.py',
+        'timelapser_v6_beta_usb_import.py',
+    )
+    return any(
+        run_text in line and any(name in line for name in download_processes)
+        for line in cp.stdout.splitlines()
+    )
 
 
 def _file_time_bounds(folder: Path) -> tuple[datetime | None, datetime | None]:

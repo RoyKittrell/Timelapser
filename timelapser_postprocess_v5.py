@@ -341,6 +341,9 @@ def run_postprocess(
         started_at=summary["started_at"],
         run_dir=str(run_dir),
         publish_instagram=bool(publish_instagram),
+        elapsed_seconds=0,
+        ended_at="",
+        error="",
     )
 
     try:
