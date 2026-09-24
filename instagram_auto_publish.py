@@ -123,12 +123,33 @@ class TemporaryHost:
         if not self.base_url:
             raise TimeoutError("Timed out waiting for temporary public URL")
         urls = {name: f"{self.base_url}/{name}" for name in self.files}
-        for url in urls.values():
-            request_obj = urllib.request.Request(url, method="HEAD")
-            with urllib.request.urlopen(request_obj, timeout=30) as response:
-                if response.status != 200:
-                    raise RuntimeError(f"Temporary host returned HTTP {response.status}: {url}")
-        return urls
+        try:
+            for url in urls.values():
+                deadline = time.monotonic() + 90
+                last_error: Exception | None = None
+                while time.monotonic() < deadline:
+                    try:
+                        request_obj = urllib.request.Request(url, method="HEAD")
+                        with urllib.request.urlopen(request_obj, timeout=30) as response:
+                            if response.status == 200:
+                                break
+                            last_error = RuntimeError(
+                                f"Temporary host returned HTTP {response.status}: {url}"
+                            )
+                    except Exception as exc:
+                        last_error = exc
+                    if self.tunnel.poll() is not None:
+                        raise RuntimeError(f"cloudflared exited while verifying {url}")
+                    time.sleep(2)
+                else:
+                    raise TimeoutError(
+                        f"Temporary host did not become reachable within 90 seconds: "
+                        f"{url}: {last_error}"
+                    )
+            return urls
+        except Exception:
+            self.__exit__()
+            raise
 
     def __exit__(self, *_: object) -> None:
         for process in (self.tunnel, self.server):
