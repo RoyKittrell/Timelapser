@@ -25,15 +25,22 @@ def run(command: list[str], *, check: bool = True) -> subprocess.CompletedProces
 
 def camera_partition() -> Path | None:
     result = subprocess.run(
-        ["lsblk", "--json", "-o", "PATH,MODEL,TYPE"],
+        ["lsblk", "--json", "-o", "NAME,PATH,MODEL,TYPE,PKNAME"],
         capture_output=True, text=True, check=False,
     )
     if result.returncode != 0:
         return None
-    for disk in json.loads(result.stdout).get("blockdevices", []):
+    devices = json.loads(result.stdout).get("blockdevices", [])
+    for disk in devices:
         if disk.get("type") != "disk" or "E-M5MarkIII" not in (disk.get("model") or ""):
             continue
         partitions = [child for child in disk.get("children", []) if child.get("type") == "part"]
+        if not partitions:
+            disk_name = disk.get("name") or Path(disk.get("path") or "").name
+            partitions = [
+                item for item in devices
+                if item.get("type") == "part" and item.get("pkname") == disk_name
+            ]
         # The disk appears before the kernel finishes reading its partition
         # table. Zero children is a normal transient state for the retry loop.
         if not partitions:

@@ -56,6 +56,17 @@ class CameraUsbPortTests(unittest.TestCase):
         )
         self.assertIsNone(mega4_usb_import.camera_partition())
 
+    @patch("mega4_usb_import.subprocess.run")
+    def test_camera_partition_supports_flat_lsblk_output(self, run):
+        run.return_value = Mock(
+            returncode=0,
+            stdout=json.dumps({"blockdevices": [
+                {"name": "sda", "path": "/dev/sda", "model": "E-M5MarkIII", "type": "disk", "pkname": None},
+                {"name": "sda1", "path": "/dev/sda1", "model": None, "type": "part", "pkname": "sda"},
+            ]}),
+        )
+        self.assertEqual(mega4_usb_import.camera_partition(), Path("/dev/sda1"))
+
 
 if __name__ == "__main__":
     unittest.main()
