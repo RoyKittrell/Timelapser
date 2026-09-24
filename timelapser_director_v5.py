@@ -1570,9 +1570,19 @@ def request_camera_wifi_connect() -> str:
     except OSError as exc:
         return f'I could not invoke the camera Wi-Fi helper: {type(exc).__name__}: {exc}'
 
+    camera_interface = 'wlan0'
     try:
+        interface_cp = subprocess.run(
+            ['nmcli', '-g', 'connection.interface-name', 'connection', 'show', 'E-M5MKIII-P-BJ8A00203'],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+        if interface_cp.returncode == 0 and interface_cp.stdout.strip():
+            camera_interface = interface_cp.stdout.strip()
         state_cp = subprocess.run(
-            ['nmcli', '-t', '-f', 'GENERAL.STATE,GENERAL.CONNECTION', 'device', 'show', 'wlan0'],
+            ['nmcli', '-t', '-f', 'GENERAL.STATE,GENERAL.CONNECTION', 'device', 'show', camera_interface],
             capture_output=True,
             text=True,
             timeout=3,
@@ -1596,7 +1606,7 @@ def request_camera_wifi_connect() -> str:
 
     if api_ok:
         return (
-            'Connected: `wlan0` is on the Olympus Wi-Fi and the camera API is reachable. '
+            f'Connected: `{camera_interface}` is on the Olympus Wi-Fi and the camera API is reachable. '
             'The home network on `wlan1` was left untouched.'
         )
     if 'connecting' in state_text.lower() or result_code == 124:
@@ -1982,7 +1992,7 @@ Use ONLY the supplied current run state, telemetry, image metrics, logs, errors 
 
 V5 facts:
 - Current clock and timezone are supplied in CURRENT DIRECTOR CLOCK below.
-- wlan0 is the dedicated Olympus Wi-Fi link; wlan1 remains the normal internet/LAN connection.
+- The interface assigned to the saved Olympus profile is the dedicated camera link; wlan1 remains the normal internet/LAN connection.
 - The camera records RAW+JPEG. ORF remains on SD; JPEG is downloaded to the Pi for analysis.
 - The deterministic Python process alone controls the camera.
 - AI proposes high-level exposure intentions; Python applies deterministic guardrails.
@@ -1990,7 +2000,7 @@ V5 facts:
 - Operator preference: after about 1/4s, V5 should prefer raising ISO before making shutter longer unless ISO is already near its limit.
 - Median brightness, highlights_pct and shadows_pct come from each downloaded JPEG.
 - This Director may start an ad-hoc validated timelapser_v5.py run or request graceful stop through a control file.
-- The Director may activate the saved Olympus Wi-Fi profile on wlan0 through a fixed privileged helper, then verify the camera API without disturbing wlan1.
+- The Director may activate the saved Olympus Wi-Fi profile on its assigned interface through a fixed privileged helper, then verify the camera API without disturbing wlan1.
 - The Director may request a guarded Raspberry Pi reboot through a fixed privileged helper. It refuses while capture or postprocessing is active unless the operator explicitly forces it.
 - The Director still has no direct camera authority and never sends Olympus camera commands itself.
 

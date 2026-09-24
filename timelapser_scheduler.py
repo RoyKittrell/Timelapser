@@ -286,11 +286,20 @@ def run_preflight(mod, m: Mission) -> tuple[bool, list[str]]:
     # A narrowly scoped sudoers rule allows only this fixed-profile helper.
     camera_wifi_helper = Path("/usr/local/sbin/timelapser-camera-wifi")
     camera_profile = "E-M5MKIII-P-BJ8A00203"
+    camera_interface = "wlan0"
     camera_connected = False
     if shutil.which("nmcli"):
         try:
+            interface = subprocess.run(
+                ["nmcli", "-g", "connection.interface-name", "connection", "show", camera_profile],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if interface.returncode == 0 and interface.stdout.strip():
+                camera_interface = interface.stdout.strip()
             state = subprocess.run(
-                ["nmcli", "-t", "-f", "GENERAL.STATE,GENERAL.CONNECTION", "device", "show", "wlan0"],
+                ["nmcli", "-t", "-f", "GENERAL.STATE,GENERAL.CONNECTION", "device", "show", camera_interface],
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -300,7 +309,7 @@ def run_preflight(mod, m: Mission) -> tuple[bool, list[str]]:
             camera_connected = False
 
     if camera_connected:
-        notes.append("OK Olympus Wi-Fi connected on wlan0")
+        notes.append(f"OK Olympus Wi-Fi connected on {camera_interface}")
     elif camera_wifi_helper.exists():
         try:
             result = subprocess.run(
@@ -310,7 +319,7 @@ def run_preflight(mod, m: Mission) -> tuple[bool, list[str]]:
                 timeout=15,
             )
             if result.returncode == 0:
-                notes.append("OK Olympus Wi-Fi connected on wlan0")
+                notes.append(f"OK Olympus Wi-Fi connected on {camera_interface}")
             else:
                 ok = False
                 detail = (result.stderr or result.stdout).strip().splitlines()

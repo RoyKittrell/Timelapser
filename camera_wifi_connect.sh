@@ -2,7 +2,8 @@
 set -euo pipefail
 
 PROFILE="E-M5MKIII-P-BJ8A00203"
-INTERFACE="wlan0"
+INTERFACE="$(/usr/bin/nmcli -g connection.interface-name connection show "$PROFILE" 2>/dev/null || true)"
+INTERFACE="${INTERFACE:-wlan0}"
 
 if [[ "${1:-}" != "connect" ]]; then
   echo "usage: $0 connect" >&2
