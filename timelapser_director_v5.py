@@ -1026,14 +1026,13 @@ def render_postprocess_status(run_dir: Path) -> None:
             eta = remaining
 
     st.markdown('### Post-run workflow')
-    cols = st.columns(4)
+    cols = st.columns(5)
     cols[0].metric('Status', status.replace('_', ' ').title())
     current_label = labels.get(current, current.replace('_', ' ').title()) or 'Finishing'
-    if stage_total:
-        current_label = f'{current_label} ({stage_completed}/{stage_total})'
-    cols[1].metric('Current stage', current_label)
-    cols[2].metric('Elapsed', format_countdown(elapsed) if elapsed is not None else '—')
-    cols[3].metric('Estimated IG upload', format_countdown(eta) if eta is not None else ('Complete' if status == 'complete' and publish_enabled else '—'))
+    cols[1].metric('Stage', current_label)
+    cols[2].metric('Stage frames', f'{stage_completed}/{stage_total}' if stage_total else '—')
+    cols[3].metric('Elapsed', format_countdown(elapsed) if elapsed is not None else '—')
+    cols[4].metric('Estimated IG upload', format_countdown(eta) if eta is not None else ('Complete' if status == 'complete' and publish_enabled else '—'))
 
     done_count = sum(1 for name, _label in stages if name in completed)
     stage_fraction = (stage_completed / stage_total) if stage_total else 0.0
