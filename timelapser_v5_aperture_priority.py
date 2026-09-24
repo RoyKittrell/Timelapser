@@ -703,7 +703,7 @@ def capture_download_analyse(camera, paths, frame_no, logger, transfer_mode):
     }
     return result, local_jpg, metrics, timings
 
-def run_startup_scout(camera, commander, state, logger, paths, transfer_mode):
+def run_startup_scout(camera, commander, state, logger, paths, transfer_mode="full"):
     logger.human("")
     logger.human(
         "Startup scout: taking one real still; "
@@ -982,6 +982,11 @@ def main():
             "Set Aperture Priority, aperture, ISO, white balance and focus on the camera body."
         )
         logger.event("aperture_priority_observer_started", initial=current)
+
+        # Keep one full-resolution opening frame for the dashboard and run
+        # record. Timed frames continue using the configured lightweight
+        # transfer mode so this adds no per-frame network overhead.
+        run_startup_scout(camera, commander, state, logger, paths, "full")
 
         next_capture_at = time.monotonic()
 

@@ -1969,6 +1969,16 @@ def render_live_panel():
             if note:
                 st.caption(f'AI note: {note}')
 
+    opening_shot = run_dir / 'startup_scout.jpg'
+    if opening_shot.exists():
+        st.markdown('### Opening test shot')
+        st.caption('Full-resolution frame captured immediately before the timed sequence began.')
+        st.image(
+            rotated_image(opening_shot),
+            caption=f'{run_dir.name} · opening frame',
+            use_container_width=True,
+        )
+
     st.markdown('### Latest frame')
     image = latest_jpeg(run_dir)
     img_col, ai_col = st.columns([1.55, 1])
