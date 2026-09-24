@@ -900,6 +900,104 @@ def render_fullres_download_status(run_dir: Path, df: pd.DataFrame) -> None:
         st.caption(' · '.join(detail))
 
 
+POSTPROCESS_STAGES = (
+    ('import_fullres_jpegs_via_mega4_usb', 'Download full JPEGs'),
+    ('validate_and_repair_jpegs', 'Validate JPEGs'),
+    ('smooth_exposure_v2', 'Smooth exposure'),
+    ('validate_smoothed_jpegs', 'Validate smoothed frames'),
+    ('render_videos', 'Create videos and overlays'),
+    ('create_instagram_carousel_formats', 'Create Instagram formats'),
+    ('queue_instagram_reel', 'Prepare Instagram package'),
+    ('publish_instagram_carousel_and_reel', 'Upload to Instagram'),
+    ('copy_videos_to_mac', 'Copy videos to Mac'),
+    ('prune_rendered_images_older_than_30_days', 'Apply image retention'),
+)
+
+
+def _postprocess_step_averages(run_dir: Path) -> dict[str, float]:
+    samples: dict[str, list[float]] = {}
+    try:
+        summaries = sorted(
+            run_dir.parent.glob('*/postprocess_workflow_summary.json'),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )[:20]
+    except Exception:
+        summaries = []
+    for path in summaries:
+        summary = read_json(path)
+        if summary.get('status') != 'complete':
+            continue
+        for step in summary.get('steps') or []:
+            try:
+                name = str(step['name'])
+                elapsed = float(step['elapsed_seconds'])
+            except (KeyError, TypeError, ValueError):
+                continue
+            samples.setdefault(name, []).append(elapsed)
+    return {name: sum(values) / len(values) for name, values in samples.items() if values}
+
+
+def render_postprocess_status(run_dir: Path) -> None:
+    live = read_json(run_dir / 'postprocess_live_status.json')
+    if not live:
+        return
+
+    status = str(live.get('status') or 'unknown')
+    current = str(live.get('current_step') or '')
+    completed = set(str(name) for name in (live.get('completed_steps') or []))
+    publish_enabled = bool(live.get('publish_instagram'))
+    stages = [item for item in POSTPROCESS_STAGES if publish_enabled or item[0] != 'publish_instagram_carousel_and_reel']
+    labels = dict(POSTPROCESS_STAGES)
+
+    now = datetime.now().astimezone()
+    started = pd.to_datetime(live.get('started_at'), errors='coerce')
+    elapsed = None
+    if not pd.isna(started):
+        elapsed = max(0.0, (now - started.to_pydatetime()).total_seconds())
+    elif live.get('elapsed_seconds') is not None:
+        elapsed = float(live['elapsed_seconds'])
+
+    eta = None
+    if status == 'running' and publish_enabled:
+        averages = _postprocess_step_averages(run_dir)
+        remaining = 0.0
+        known = 0
+        current_elapsed = 0.0
+        current_started = pd.to_datetime(live.get('current_step_started_at'), errors='coerce')
+        if not pd.isna(current_started):
+            current_elapsed = max(0.0, (now - current_started.to_pydatetime()).total_seconds())
+        for name, _label in stages:
+            if name in completed:
+                continue
+            average = averages.get(name)
+            if average is not None:
+                remaining += max(0.0, average - current_elapsed) if name == current else average
+                known += 1
+            if name == 'publish_instagram_carousel_and_reel':
+                break
+        if known:
+            eta = remaining
+
+    st.markdown('### Post-run workflow')
+    cols = st.columns(4)
+    cols[0].metric('Status', status.replace('_', ' ').title())
+    cols[1].metric('Current stage', labels.get(current, current.replace('_', ' ').title()) or 'Finishing')
+    cols[2].metric('Elapsed', format_countdown(elapsed) if elapsed is not None else '—')
+    cols[3].metric('Estimated IG upload', format_countdown(eta) if eta is not None else ('Complete' if status == 'complete' and publish_enabled else '—'))
+
+    done_count = sum(1 for name, _label in stages if name in completed)
+    if stages:
+        st.progress(min(1.0, done_count / len(stages)))
+    stage_text = []
+    for name, label in stages:
+        marker = '✓' if name in completed else '▶' if name == current else '·'
+        stage_text.append(f'{marker} {label}')
+    st.caption('  |  '.join(stage_text))
+    if status.startswith('failed'):
+        st.error(str(live.get('error') or f'Postprocessing stopped during {labels.get(current, current)}.'))
+
+
 def format_seconds(value: Any) -> str:
     try:
         seconds = float(value)
@@ -1802,6 +1900,7 @@ def render_live_panel():
     st.metric('Camera SD Card capacity', sd_label)
     st.caption(sd_detail)
     render_fullres_download_status(run_dir, df)
+    render_postprocess_status(run_dir)
 
     top = st.columns(5)
     top[0].metric('Frame', frame_no if frame_no else '—')

@@ -62,6 +62,28 @@ def _log(log_path: Path, message: str) -> None:
     _print_stdout(line)
 
 
+def _write_live_status(log_path: Path, **changes) -> None:
+    path = log_path.parent / "postprocess_live_status.json"
+    try:
+        current = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except Exception:
+        current = {}
+    completed = changes.pop("completed_step", None)
+    next_step = changes.get("current_step")
+    if next_step and next_step != current.get("current_step"):
+        changes["current_step_started_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
+    current.update(changes)
+    if completed:
+        names = list(current.get("completed_steps") or [])
+        if completed not in names:
+            names.append(completed)
+        current["completed_steps"] = names
+    current["updated_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(current, indent=2, default=str) + "\n", encoding="utf-8")
+    temporary.replace(path)
+
+
 def _record_error(run_dir: Path, where: str, **details) -> None:
     record = {
         "time": datetime.now().astimezone().isoformat(timespec="milliseconds"),
@@ -143,6 +165,7 @@ def _repair_unreadable_frames(run_dir: Path, frames_dir: Path, log_path: Path) -
 
 def _run_step(log_path: Path, name: str, cmd: list[str], cwd: Path) -> dict:
     started = time.monotonic()
+    _write_live_status(log_path, status="running", current_step=name)
     _log(log_path, f"START {name}: " + " ".join(shlex.quote(x) for x in cmd))
     with log_path.open("a", encoding="utf-8") as f:
         f.write("\n" + "=" * 72 + f"\n{name}\n" + "=" * 72 + "\n")
@@ -161,6 +184,10 @@ def _run_step(log_path: Path, name: str, cmd: list[str], cwd: Path) -> dict:
         proc.wait()
     elapsed = time.monotonic() - started
     _log(log_path, f"END {name}: returncode={proc.returncode} elapsed={elapsed:.1f}s")
+    if proc.returncode == 0:
+        _write_live_status(log_path, current_step="", completed_step=name)
+    else:
+        _write_live_status(log_path, status="failed", current_step=name)
     return {
         "name": name,
         "command": cmd,
@@ -306,6 +333,15 @@ def run_postprocess(
         "steps": [],
         "status": "not_started",
     }
+    _write_live_status(
+        log_path,
+        status="running",
+        current_step="preparing",
+        completed_steps=[],
+        started_at=summary["started_at"],
+        run_dir=str(run_dir),
+        publish_instagram=bool(publish_instagram),
+    )
 
     try:
         _log(log_path, "=" * 72)
@@ -332,8 +368,10 @@ def run_postprocess(
             fullres_source = run_dir / "frames_full_jpeg"
             smoothed_source = run_dir / SMOOTHED_FRAME_DIRNAME
 
+            _write_live_status(log_path, status="running", current_step="validate_and_repair_jpegs")
             step = _repair_unreadable_frames(run_dir, fullres_source, log_path)
             summary["steps"].append(step)
+            _write_live_status(log_path, current_step="", completed_step=step["name"])
             _log(log_path, f"JPEG check: {step['checked']} checked, {step['repaired']} repaired")
             if step["checked"] < 3:
                 raise RuntimeError(f"Need at least 3 full-resolution JPEGs, found {step['checked']}")
@@ -361,8 +399,10 @@ def run_postprocess(
 
             source = smoothed_source if smooth_exposure else fullres_source
             if smooth_exposure:
+                _write_live_status(log_path, status="running", current_step="validate_smoothed_jpegs")
                 step = _repair_unreadable_frames(run_dir, source, log_path)
                 summary["steps"].append(step)
+                _write_live_status(log_path, current_step="", completed_step="validate_smoothed_jpegs")
                 _log(log_path, f"Smoothed JPEG check: {step['checked']} checked, {step['repaired']} repaired")
             step = _run_step(
                 log_path,
@@ -452,6 +492,14 @@ def run_postprocess(
     finally:
         summary["elapsed_seconds"] = time.monotonic() - workflow_started
         summary["ended_at"] = datetime.now().astimezone().isoformat(timespec="seconds")
+        _write_live_status(
+            log_path,
+            status=summary["status"],
+            current_step="",
+            elapsed_seconds=summary["elapsed_seconds"],
+            ended_at=summary["ended_at"],
+            error=summary.get("error", ""),
+        )
         if summary["status"].startswith("failed"):
             _record_error(
                 run_dir, "postprocess_workflow", status=summary["status"],
