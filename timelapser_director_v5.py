@@ -17,6 +17,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+import altair as alt
 import streamlit as st
 from dotenv import load_dotenv
 from PIL import Image
@@ -1798,6 +1799,37 @@ def format_shutter(seconds: Any) -> str:
     return f'1/{denom}s' if denom else f'{s:.4f}s'
 
 
+def shutter_history_chart(plot: pd.DataFrame) -> alt.Chart | None:
+    if 'shutter_seconds' not in plot.columns:
+        return None
+    frame = plot[['shutter_seconds']].reset_index()
+    x_field = str(frame.columns[0])
+    frame['shutter_seconds'] = pd.to_numeric(frame['shutter_seconds'], errors='coerce')
+    frame = frame[frame['shutter_seconds'] > 0].copy()
+    if frame.empty:
+        return None
+    frame['shutter_label'] = frame['shutter_seconds'].map(format_shutter)
+    x_type = 'temporal' if pd.api.types.is_datetime64_any_dtype(frame[x_field]) else 'quantitative'
+    axis = alt.Axis(
+        title='Shutter speed',
+        labelExpr="datum.value < 1 ? '1/' + format(1 / datum.value, '.0f') : format(datum.value, '.2~f') + 's'",
+        grid=True,
+    )
+    return (
+        alt.Chart(frame)
+        .mark_line()
+        .encode(
+            x=alt.X(f'{x_field}:{x_type[0].upper()}', title=None),
+            y=alt.Y('shutter_seconds:Q', scale=alt.Scale(type='log'), axis=axis),
+            tooltip=[
+                alt.Tooltip(f'{x_field}:{x_type[0].upper()}', title='Time' if x_type == 'temporal' else 'Frame'),
+                alt.Tooltip('shutter_label:N', title='Shutter'),
+            ],
+        )
+        .properties(height=220)
+    )
+
+
 def latest_ai_decision(run_dir: Path) -> dict[str, Any]:
     rows = read_jsonl_tail(run_dir / 'ai_decisions.jsonl', 30)
     return rows[-1] if rows else {}
@@ -2030,9 +2062,10 @@ def render_live_panel():
     st.markdown('### Exposure history')
     e1, e2, e3 = st.columns(3)
     with e1:
-        st.caption('Shutter duration (seconds)')
-        if 'shutter_seconds' in plot.columns:
-            st.line_chart(plot[['shutter_seconds']], height=220)
+        st.caption('Shutter speed')
+        shutter_chart = shutter_history_chart(plot)
+        if shutter_chart is not None:
+            st.altair_chart(shutter_chart, use_container_width=True)
     with e2:
         st.caption('ISO')
         if 'iso' in plot.columns:
