@@ -39,7 +39,7 @@ from v5_commander import AICommander
 from v5_filesystem import ensure_run_tree
 from v5_image import analyse_jpeg
 from v5_holygrail import ExposureSettings, ShadowHolyGrailController
-from timelapser_postprocess_v5 import run_postprocess
+from timelapser_postprocess_v5 import run_postprocess, should_auto_publish_instagram
 
 
 def load_env_file(path: Path):
@@ -878,6 +878,7 @@ def main():
         int(args.max_frames * args.interval),
         int(args.max_run_minutes * 60),
     )
+    auto_publish_instagram = should_auto_publish_instagram(args.mode)
     manifest = {
         "version": "5.0.9-aperture-priority-observer",
         "mode": args.mode,
@@ -900,6 +901,7 @@ def main():
             "render_after": bool(args.post_render),
             "copy_videos_to_mac_after": bool(args.post_copy_videos_to_mac),
             "mac_video_dest": args.post_mac_video_dest,
+            "instagram_auto_publish": auto_publish_instagram,
         },
         "aperture_priority_readback": {
             "read_exposure_every_n": int(args.read_exposure_every_n),
@@ -1149,11 +1151,18 @@ def main():
             logger.human("=" * 68)
             logger.human(" V5 POST-RUN WORKFLOW")
             logger.human("=" * 68)
+            if not auto_publish_instagram:
+                logger.human(
+                    "Instagram auto-publish disabled for general mode; "
+                    "outputs will remain on the external drive."
+                )
             post_summary = run_postprocess(
                 run_dir,
                 download_fullres=args.post_download_fullres,
                 smooth_exposure=args.post_render,
                 render=args.post_render,
+                queue_instagram=auto_publish_instagram,
+                publish_instagram=auto_publish_instagram,
                 copy_videos_to_mac=args.post_copy_videos_to_mac,
                 mac_video_dest=args.post_mac_video_dest,
             )

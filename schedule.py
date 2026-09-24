@@ -91,7 +91,8 @@ DEFAULTS = {
         "max_frames": None,
         "download_fullres_after": DEFAULT_DOWNLOAD_FULLRES_AFTER,
         "render_after": DEFAULT_RENDER_AFTER,
-        "copy_videos_to_mac_after": DEFAULT_COPY_VIDEOS_TO_MAC_AFTER,
+        # General missions are retained on the external drive for manual pickup.
+        "copy_videos_to_mac_after": False,
         "mac_video_dest": DEFAULT_MAC_VIDEO_DEST,
     },
 }

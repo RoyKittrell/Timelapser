@@ -266,6 +266,14 @@ def _publish_instagram(log_path: Path, run_dir: Path, cwd: Path, python: str) ->
     )
 
 
+AUTO_PUBLISH_INSTAGRAM_MODES = frozenset({"sunrise", "sunset"})
+
+
+def should_auto_publish_instagram(mode: str) -> bool:
+    """Return whether a completed mission may publish to Instagram automatically."""
+    return str(mode).strip().lower() in AUTO_PUBLISH_INSTAGRAM_MODES
+
+
 def run_postprocess(
     run_dir: Path,
     *,
