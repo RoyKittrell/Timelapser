@@ -1943,8 +1943,6 @@ def render_live_panel():
     wifi_dot, _wifi_detail = wifi_indicator(wifi_state, wifi_connection)
     next_label, next_detail = next_scheduled_timelapse()
     interval = parse_interval(run_dir)
-    ai_decision = latest_ai_decision(run_dir)
-    ai_action, ai_summary, ai_target = ai_display(ai_decision)
     errors = read_jsonl_tail(run_dir / 'errors.jsonl', 200)
 
     frame_no = int(latest.get('frame', 0)) if latest else 0
@@ -2021,28 +2019,10 @@ def render_live_panel():
     if show_latest_frame:
         st.markdown('### Latest frame')
         image = latest_jpeg(run_dir)
-        img_col, ai_col = st.columns([1.55, 1])
-        with img_col:
-            if image:
-                st.image(rotated_image(image), caption=image.name, use_container_width=True)
-            else:
-                st.info('No downloaded JPEG yet.')
-        ai_container = ai_col
-    else:
-        ai_container = st.container()
-
-    with ai_container:
-        st.markdown('### AI Director' if not show_latest_frame else '#### AI Director')
-        st.metric('Latest action', ai_action)
-        if ai_target:
-            st.markdown(f'**Target:** {ai_target}')
-        st.write(ai_summary or 'Waiting for the first AI review.')
-        trigger = ai_decision.get('trigger') if ai_decision else None
-        when = ai_decision.get('time') if ai_decision else None
-        if trigger:
-            st.caption(f'Trigger: {trigger}')
-        if when:
-            st.caption(f'Decision logged: {when}')
+        if image:
+            st.image(rotated_image(image), caption=image.name, use_container_width=True)
+        else:
+            st.info('No downloaded JPEG yet.')
 
     if df.empty:
         st.info('Waiting for telemetry.csv to receive its first frame.')
