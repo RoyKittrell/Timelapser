@@ -33,7 +33,7 @@ from v5_config import (
     MIN_APERTURE,
     PREFERRED_MAX_SHUTTER_SECONDS,
 )
-from v5_camera import WifiCameraController
+from v5_camera import SHUTTER_CHOICES, WifiCameraController
 from v5_commander import AICommander
 from v5_image import analyse_jpeg
 from v5_logging import RunLogger
@@ -1812,7 +1812,9 @@ def shutter_history_chart(plot: pd.DataFrame) -> alt.Chart | None:
     x_type = 'temporal' if pd.api.types.is_datetime64_any_dtype(frame[x_field]) else 'quantitative'
     axis = alt.Axis(
         title=None,
-        labelExpr="datum.value < 1 ? '1/' + format(1 / datum.value, '.0f') : format(datum.value, '.2~f') + 's'",
+        values=sorted({seconds for seconds, _camera_value in SHUTTER_CHOICES}),
+        labelExpr="datum.value < 1 ? '1/' + format(1 / datum.value, '.2~f') : format(datum.value, '.2~f') + 's'",
+        labelOverlap='greedy',
         grid=True,
     )
     return (
