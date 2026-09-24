@@ -1882,6 +1882,11 @@ st.sidebar.markdown('### Director')
 st.sidebar.caption('Observer plus constrained start/stop controls. Camera commands remain owned by timelapser_v5.py.')
 st.sidebar.caption(f'Auto-refresh: {REFRESH_SECONDS}s')
 st.sidebar.code(str(run_dir), language=None)
+show_latest_frame = st.sidebar.toggle(
+    'Show live latest frame',
+    value=False,
+    help='Optional changing thumbnail view. The fixed opening test shot remains visible when available.',
+)
 
 st.title('📷 Timelapser V5 Director')
 st.caption('Live Wi-Fi timelapse telemetry, image analysis, exposure history and AI reasoning.')
@@ -1979,16 +1984,21 @@ def render_live_panel():
             use_container_width=True,
         )
 
-    st.markdown('### Latest frame')
-    image = latest_jpeg(run_dir)
-    img_col, ai_col = st.columns([1.55, 1])
-    with img_col:
-        if image:
-            st.image(rotated_image(image), caption=image.name, use_container_width=True)
-        else:
-            st.info('No downloaded JPEG yet.')
-    with ai_col:
-        st.markdown('#### AI Director')
+    if show_latest_frame:
+        st.markdown('### Latest frame')
+        image = latest_jpeg(run_dir)
+        img_col, ai_col = st.columns([1.55, 1])
+        with img_col:
+            if image:
+                st.image(rotated_image(image), caption=image.name, use_container_width=True)
+            else:
+                st.info('No downloaded JPEG yet.')
+        ai_container = ai_col
+    else:
+        ai_container = st.container()
+
+    with ai_container:
+        st.markdown('### AI Director' if not show_latest_frame else '#### AI Director')
         st.metric('Latest action', ai_action)
         if ai_target:
             st.markdown(f'**Target:** {ai_target}')
