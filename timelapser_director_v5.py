@@ -983,6 +983,11 @@ def render_postprocess_status(run_dir: Path) -> None:
     status = str(live.get('status') or 'unknown')
     current = str(live.get('current_step') or '')
     completed = set(str(name) for name in (live.get('completed_steps') or []))
+    publish_receipt = read_json(run_dir / 'instagram_publish_receipt.json')
+    if status == 'failed_publish_instagram' and publish_receipt.get('status') == 'complete':
+        status = 'published_after_retry'
+        current = 'publish_instagram_carousel_and_reel'
+        completed.add(current)
     publish_enabled = bool(live.get('publish_instagram'))
     stages = [item for item in POSTPROCESS_STAGES if publish_enabled or item[0] != 'publish_instagram_carousel_and_reel']
     labels = dict(POSTPROCESS_STAGES)
