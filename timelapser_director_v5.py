@@ -50,6 +50,7 @@ DIRECTOR_CONTROL_LOG = CONTROL_DIR / 'director_control.log'
 PREFLIGHT_ALERT_FILE = CONTROL_DIR / 'director_preflight_alert.json'
 TEST_SHOTS_DIR = V5_ROOT / 'director_test_shots'
 TEST_SHOT_RETENTION = 12
+TEST_SHOT_RUN_WINDOW = timedelta(hours=2)
 REBOOT_HELPER = Path('/usr/local/sbin/timelapser-reboot')
 CAMERA_WIFI_HELPER = Path('/usr/local/sbin/timelapser-camera-wifi')
 HOME_WIFI_PROFILE = 'netplan-wlan0-_A29-01'
@@ -321,20 +322,55 @@ def _path_is_inside(path: Path, parent: Path) -> bool:
         return False
 
 
-def latest_test_shot() -> Path | None:
+def run_started_at(run_dir: Path) -> datetime | None:
+    try:
+        return datetime.strptime(run_dir.name[:15], '%Y%m%d_%H%M%S').astimezone()
+    except (TypeError, ValueError):
+        return None
+
+
+def test_shot_matches_run(path: Path, run_dir: Path) -> bool:
+    summary = latest_test_shot_summary(path)
+    recorded_run = summary.get('run_dir')
+    if recorded_run:
+        try:
+            if Path(str(recorded_run)).resolve() == run_dir.resolve():
+                return True
+        except OSError:
+            pass
+
+    run_start = run_started_at(run_dir)
+    if run_start is None:
+        return False
+    try:
+        shot_time = datetime.fromtimestamp(path.stat().st_mtime).astimezone()
+    except OSError:
+        return False
+    return abs(shot_time - run_start) <= TEST_SHOT_RUN_WINDOW
+
+
+def latest_test_shot(run_dir: Path) -> Path | None:
     if not TEST_SHOTS_DIR.exists():
         return None
-    imgs = list(TEST_SHOTS_DIR.glob('*/final_full.jpg'))
+    imgs = [
+        path
+        for path in TEST_SHOTS_DIR.glob('*/final_full.jpg')
+        if test_shot_matches_run(path, run_dir)
+    ]
     return max(imgs, key=lambda p: p.stat().st_mtime) if imgs else None
 
 
-def display_test_shot() -> Path | None:
+def display_test_shot(run_dir: Path) -> Path | None:
     session_path = st.session_state.get('latest_test_shot_path')
     if session_path:
         candidate = Path(session_path)
-        if candidate.exists() and _path_is_inside(candidate, TEST_SHOTS_DIR):
+        if (
+            candidate.exists()
+            and _path_is_inside(candidate, TEST_SHOTS_DIR)
+            and test_shot_matches_run(candidate, run_dir)
+        ):
             return candidate
-    return latest_test_shot()
+    return latest_test_shot(run_dir)
 
 
 def prune_old_test_shots() -> None:
@@ -2008,7 +2044,7 @@ def render_live_panel():
     second[4].metric('Logged errors', len(errors))
 
     prune_old_test_shots()
-    test_image_path = display_test_shot()
+    test_image_path = display_test_shot(run_dir)
     hidden_test_shot = st.session_state.get('hidden_test_shot_path')
     if test_image_path and test_image_path.exists() and str(test_image_path) != hidden_test_shot:
         test_summary = latest_test_shot_summary(test_image_path)

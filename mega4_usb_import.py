@@ -102,8 +102,13 @@ def cleanup(device: Path | None) -> None:
         if device is not None and mountpoint(device) is not None:
             run(["udisksctl", "unmount", "-b", str(device)], check=False)
     finally:
-        set_port("off")
-        log("MEGA4 camera port is off; camera may return to shooting mode")
+        try:
+            set_port("off")
+            log("MEGA4 camera port is off; camera may return to shooting mode")
+        except subprocess.CalledProcessError as exc:
+            # Preserve the original import/enumeration failure. Cleanup is
+            # best-effort and must not replace the useful root-cause error.
+            log(f"WARNING camera-port cleanup failed with return code {exc.returncode}")
 
 
 def parse_args() -> argparse.Namespace:
