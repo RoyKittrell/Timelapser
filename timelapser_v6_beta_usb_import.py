@@ -201,8 +201,12 @@ def choose_source(
         if allow_time_mismatch:
             return src, "matched_time_mismatch_allowed", delta
         return None, "timestamp_mismatch", delta
-    if len(matches) == 1 and allow_time_mismatch:
-        return matches[0], "matched_no_timestamp_allowed", None
+    if len(matches) == 1:
+        # Some Olympus configurations write an all-zero DateTime and omit
+        # DateTimeOriginal. A basename that occurs exactly once across the
+        # entire indexed SD card is still unambiguous. Duplicate basenames
+        # remain rejected unless the operator explicitly allows a mismatch.
+        return matches[0], "matched_unique_no_timestamp", None
     return None, "timestamp_missing", None
 
 

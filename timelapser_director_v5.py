@@ -322,7 +322,7 @@ def _path_is_inside(path: Path, parent: Path) -> bool:
         return False
 
 
-def run_started_at(run_dir: Path) -> datetime | None:
+def run_directory_started_at(run_dir: Path) -> datetime | None:
     try:
         return datetime.strptime(run_dir.name[:15], '%Y%m%d_%H%M%S').astimezone()
     except (TypeError, ValueError):
@@ -339,7 +339,7 @@ def test_shot_matches_run(path: Path, run_dir: Path) -> bool:
         except OSError:
             pass
 
-    run_start = run_started_at(run_dir)
+    run_start = run_directory_started_at(run_dir)
     if run_start is None:
         return False
     try:
