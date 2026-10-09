@@ -13,7 +13,7 @@ This repository contains both the proven V5 Wi-Fi implementation and the current
 V6 currently provides:
 
 - Wired autofocus and shutter control through active-HIGH 5 V relay modules.
-- A two-second autofocus operation at mission startup, followed by shutter-only frame capture.
+- A two-second autofocus operation at mission startup, shutter-only frame capture, and a final AF pulse that clears the RM-CB2 half-press state.
 - Deterministic monotonic capture timing without dependence on Olympus Wi-Fi.
 - Post-run camera USB mounting and full-resolution JPEG import.
 - Post-import EXIF extraction, brightness analysis, rendering and Instagram publishing.
@@ -72,7 +72,7 @@ Shutter relay IN   -> physical pin 18, BCM GPIO24
 
 The installed modules are active-HIGH: HIGH closes the relay and LOW is the safe idle state. Camera common is part of the isolated contact side and must not be connected to Pi ground. Pi 5 V must never be connected to the camera-side `COM`, `NO` or `NC` terminals.
 
-The commissioned startup sequence holds AF for two seconds, returns GPIO23 LOW, waits 0.75 seconds, and then uses shutter-only pulses on GPIO24. This prevents the camera from refocusing every frame.
+The commissioned sequence holds AF for two seconds, returns GPIO23 LOW, waits 0.75 seconds, and then uses shutter-only pulses on GPIO24. This prevents the camera from refocusing every frame. The RM-CB2 interface retains half-press after shutter-only operation, so V6 finishes with a one-second AF pulse and returns both GPIOs LOW.
 
 ## V6 Architecture
 

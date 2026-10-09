@@ -53,6 +53,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--shutter-gpio", type=int, default=config.SHUTTER_GPIO)
     parser.add_argument("--focus-pulse", type=float, default=config.FOCUS_PULSE_SECONDS)
     parser.add_argument("--focus-settle", type=float, default=config.FOCUS_SETTLE_SECONDS)
+    parser.add_argument(
+        "--half-press-clear",
+        type=float,
+        default=config.HALF_PRESS_CLEAR_SECONDS,
+    )
     parser.add_argument("--shutter-pulse", type=float, default=config.SHUTTER_PULSE_SECONDS)
     parser.add_argument("--simulate", action="store_true", help="Log timing without touching GPIO")
     parser.add_argument("--skip-autofocus", action="store_true")
@@ -122,6 +127,7 @@ def main() -> int:
         "shutter_gpio": args.shutter_gpio,
         "relay_active_low": config.RELAY_ACTIVE_LOW,
         "focus_pulse_seconds": args.focus_pulse,
+        "half_press_clear_seconds": args.half_press_clear,
         "shutter_pulse_seconds": args.shutter_pulse,
         "autofocus_once": not args.skip_autofocus,
         "simulate": args.simulate,
@@ -142,44 +148,64 @@ def main() -> int:
             active_low=config.RELAY_ACTIVE_LOW,
             simulate=args.simulate,
         ) as camera:
-            if not args.skip_autofocus:
-                append_event(events, "autofocus_started")
-                pulse = camera.autofocus_once(args.focus_pulse)
-                append_event(events, "autofocus_complete", pulse_seconds=pulse.duration_seconds)
-                time.sleep(args.focus_settle)
+            shutter_attempted = False
+            try:
+                if not args.skip_autofocus:
+                    append_event(events, "autofocus_started")
+                    pulse = camera.autofocus_once(args.focus_pulse)
+                    append_event(events, "autofocus_complete", pulse_seconds=pulse.duration_seconds)
+                    time.sleep(args.focus_settle)
 
-            first_due = time.monotonic()
-            for frame_number in range(1, planned_frames + 1):
-                if stop or config.STOP_REQUEST.exists() or time.monotonic() >= deadline:
-                    break
-                due = first_due + (frame_number - 1) * args.interval
-                remaining = due - time.monotonic()
-                if remaining > 0:
-                    time.sleep(remaining)
-                if stop or config.STOP_REQUEST.exists():
-                    break
-                wall_started = datetime.now().astimezone()
-                pulse = camera.take_picture(args.shutter_pulse)
-                row = {
-                    "frame": frame_number,
-                    "trigger_time": wall_started.isoformat(timespec="milliseconds"),
-                    "scheduled_monotonic": due,
-                    "actual_monotonic": pulse.started_monotonic,
-                    "schedule_lag_seconds": pulse.started_monotonic - due,
-                    "pulse_seconds": pulse.duration_seconds,
-                }
-                rows.append(row)
-                append_event(events, "shutter_released", **row)
-                atomic_json(
-                    config.ACTIVE_RUN,
-                    {
-                        "run_dir": str(run_dir),
-                        **manifest,
-                        "status": "capturing",
-                        "completed_frames": len(rows),
-                        "last_trigger_time": row["trigger_time"],
-                    },
-                )
+                first_due = time.monotonic()
+                for frame_number in range(1, planned_frames + 1):
+                    if stop or config.STOP_REQUEST.exists() or time.monotonic() >= deadline:
+                        break
+                    due = first_due + (frame_number - 1) * args.interval
+                    remaining = due - time.monotonic()
+                    if remaining > 0:
+                        time.sleep(remaining)
+                    if stop or config.STOP_REQUEST.exists():
+                        break
+                    wall_started = datetime.now().astimezone()
+                    shutter_attempted = True
+                    pulse = camera.take_picture(args.shutter_pulse)
+                    row = {
+                        "frame": frame_number,
+                        "trigger_time": wall_started.isoformat(timespec="milliseconds"),
+                        "scheduled_monotonic": due,
+                        "actual_monotonic": pulse.started_monotonic,
+                        "schedule_lag_seconds": pulse.started_monotonic - due,
+                        "pulse_seconds": pulse.duration_seconds,
+                    }
+                    rows.append(row)
+                    append_event(events, "shutter_released", **row)
+                    atomic_json(
+                        config.ACTIVE_RUN,
+                        {
+                            "run_dir": str(run_dir),
+                            **manifest,
+                            "status": "capturing",
+                            "completed_frames": len(rows),
+                            "last_trigger_time": row["trigger_time"],
+                        },
+                    )
+            finally:
+                if shutter_attempted:
+                    append_event(events, "half_press_clear_started")
+                    try:
+                        pulse = camera.clear_half_press(args.half_press_clear)
+                    except Exception as clear_exc:
+                        append_event(
+                            events,
+                            "half_press_clear_failed",
+                            error=f"{type(clear_exc).__name__}: {clear_exc}",
+                        )
+                    else:
+                        append_event(
+                            events,
+                            "half_press_clear_complete",
+                            pulse_seconds=pulse.duration_seconds,
+                        )
         status = "capture_complete"
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"

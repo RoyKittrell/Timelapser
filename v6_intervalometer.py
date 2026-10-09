@@ -91,6 +91,10 @@ class WiredCamera:
     def take_picture(self, seconds: float) -> PulseResult:
         return self._pulse(self.shutter, seconds)
 
+    def clear_half_press(self, seconds: float) -> PulseResult:
+        """Cycle AF after shutter-only capture to clear the RM-CB2 state."""
+        return self._pulse(self.focus, seconds)
+
     def close(self) -> None:
         if self.closed:
             return

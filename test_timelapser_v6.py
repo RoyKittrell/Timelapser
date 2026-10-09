@@ -27,6 +27,7 @@ def test_wired_camera_pulses_and_releases(monkeypatch):
     assert isinstance(camera.focus, SimulatedOutput)
     camera.autofocus_once(1.0)
     camera.take_picture(0.1)
+    camera.clear_half_press(0.1)
     assert camera.focus.value is False
     assert camera.shutter.value is False
     camera.close()
@@ -50,6 +51,8 @@ def test_capture_simulation_creates_trigger_only_run(tmp_path):
     manifest = json.loads((run_dir / "run_manifest.json").read_text())
     assert manifest["completed_frames"] == 3
     assert (run_dir / "trigger_timeline.csv").exists()
+    events = (run_dir / "capture_events.jsonl").read_text()
+    assert "half_press_clear_complete" in events
     assert not (run_dir / "telemetry.csv").exists()
     assert not (run_dir / "frames_jpeg").exists()
 

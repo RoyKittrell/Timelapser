@@ -16,6 +16,9 @@ its own SD card.
   failure, signal handling, and normal shutdown.
 - Startup autofocus holds AF for 2 seconds, releases it, then allows a 0.75
   second settling period before shutter-only capture begins.
+- The RM-CB2 interface retains a half-press state after shutter-only pulses.
+  V6 therefore performs a 1 second AF pulse after the final frame, including
+  interrupted runs, to clear that state before releasing the GPIO controller.
 - `/home/roy/.config/timelapser/v6-hardware.env` can override the assignments
   if the physical wiring changes later.
 
