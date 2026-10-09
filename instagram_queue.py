@@ -17,10 +17,32 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from post_metadata import write_post_files
-
 
 DEFAULT_QUEUE_DIR = Path("instagram_queue") / "ready"
+
+CORE_HASHTAGS = (
+    "#timelapse",
+    "#KualaLumpur",
+    "#Malaysia",
+    "#Merdeka118",
+    "#KL118",
+    "#PNB118",
+    "#CelebrateMerdeka118",
+    "#LifeAtMerdeka118",
+    "#Olympus",
+    "#OlympusOMD",
+    "#OlympusPhotography",
+    "#OlympusEM5MarkIII",
+    "#EM5MarkIII",
+    "#OMSystem",
+    "#OMSystemCamera",
+    "#OMSystemCommunity",
+    "#MicroFourThirds",
+    "#M43",
+    "#MZuiko",
+    "#RaspberryPi",
+    "#photography",
+)
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -83,15 +105,17 @@ def format_clock(iso_text: str | None) -> str:
         return str(iso_text)[:16]
 
 
+def caption_hashtags(mode: str) -> str:
+    event_tag = f"#{mode}" if mode in {"sunrise", "sunset"} else "#cityscape"
+    return " ".join((event_tag, *CORE_HASHTAGS))
+
+
 def build_caption(run_dir: Path, metadata: dict[str, Any], custom_caption: str | None = None) -> str:
+    mode = str(metadata.get("mode") or "timelapse").lower()
+    tags = caption_hashtags(mode)
     if custom_caption:
-        return custom_caption.strip()
+        return custom_caption.strip() + "\n\n" + tags
 
-    post_caption = str(metadata.get("post_caption") or "").strip()
-    if post_caption:
-        return post_caption
-
-    mode = str(metadata.get("mode") or "timelapse")
     frames = metadata.get("frames")
     started = format_clock(metadata.get("started_at"))
     ended = format_clock(metadata.get("ended_at"))
@@ -113,7 +137,6 @@ def build_caption(run_dir: Path, metadata: dict[str, Any], custom_caption: str |
     pieces.append("Olympus E-M5 Mark III")
     pieces.append("Raspberry Pi Timelapser V5")
 
-    tags = "#timelapse #kualalumpur #sunset #sunrise #olympus #raspberrypi #photography"
     return ". ".join(pieces) + ".\n\n" + tags
 
 
@@ -180,7 +203,6 @@ def prepare_queue_item(
     render_summary = read_json(run_dir / "render_summary_v3.json")
     telemetry = read_telemetry_summary(run_dir)
     mode = run_mode(run_dir, run_summary)
-    post_metadata = write_post_files(run_dir)
 
     item_dir = queue_dir.expanduser().resolve() / safe_name(run_dir.name)
     item_dir.mkdir(parents=True, exist_ok=True)
@@ -202,9 +224,6 @@ def prepare_queue_item(
         "ended_at": telemetry.get("ended_at"),
         "run_summary": run_summary,
         "render_summary": render_summary,
-        "post_metadata": post_metadata,
-        "post_title": post_metadata.get("title"),
-        "post_caption": post_metadata.get("caption"),
         "video_probe": ffprobe_video(dest_video),
     }
     caption_text = build_caption(run_dir, metadata, caption)

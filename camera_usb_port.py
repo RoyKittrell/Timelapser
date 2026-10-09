@@ -90,7 +90,17 @@ def main() -> int:
         return 0
     if args.action == "off":
         if not visible:
-            raise SystemExit("Refusing to switch off: Olympus USB is not currently visible")
+            try:
+                mapping = load_mapping()
+            except (OSError, ValueError, RuntimeError):
+                print("Olympus USB is not visible and no saved port is available; leaving every hub port unchanged")
+                return 0
+            print(
+                "Olympus USB is not visible; switching off its saved "
+                f"hub={mapping['hub']} port={mapping['port']}"
+            )
+            run_switch(mapping, "off")
+            return 0
         run_switch(visible, "off")
         return 0
 

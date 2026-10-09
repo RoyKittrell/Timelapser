@@ -1,0 +1,11 @@
+[Unit]
+Description=Record Timelapser enclosure conditions every 15 minutes
+
+[Timer]
+OnCalendar=*-*-* *:00/15:00
+Persistent=true
+AccuracySec=15s
+Unit=timelapser-environment.service
+
+[Install]
+WantedBy=timers.target

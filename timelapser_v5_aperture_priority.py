@@ -862,6 +862,15 @@ def main():
         default=None,
         help="scp-style destination for rendered videos, e.g. user@host:/path.",
     )
+    parser.add_argument(
+        "--defer-postprocess",
+        action="store_true",
+        help=(
+            "Write a durable post-processing request after a clean capture instead "
+            "of processing immediately. The scheduler drains these requests when "
+            "no nearby mission needs the camera or Pi."
+        ),
+    )
     args = parser.parse_args()
 
     load_env_file(ENV_FILE)
@@ -902,6 +911,7 @@ def main():
             "copy_videos_to_mac_after": bool(args.post_copy_videos_to_mac),
             "mac_video_dest": args.post_mac_video_dest,
             "instagram_auto_publish": auto_publish_instagram,
+            "deferred": bool(args.defer_postprocess),
         },
         "aperture_priority_readback": {
             "read_exposure_every_n": int(args.read_exposure_every_n),
@@ -1161,19 +1171,44 @@ def main():
                     "Instagram auto-publish disabled for general mode; "
                     "outputs will remain on the external drive."
                 )
-            post_summary = run_postprocess(
-                run_dir,
-                download_fullres=args.post_download_fullres,
-                smooth_exposure=args.post_render,
-                render=args.post_render,
-                queue_instagram=auto_publish_instagram,
-                publish_instagram=auto_publish_instagram,
-                copy_videos_to_mac=args.post_copy_videos_to_mac,
-                mac_video_dest=args.post_mac_video_dest,
-            )
-            logger.event("postprocess_workflow_completed", summary=post_summary)
-            logger.human(f"Postprocess status:    {post_summary.get('status')}")
-            logger.human(f"Postprocess log:       {run_dir / 'postprocess_workflow.log'}")
+            if args.defer_postprocess:
+                request = {
+                    "version": 1,
+                    "status": "pending",
+                    "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+                    "run_dir": str(run_dir.resolve()),
+                    "download_fullres": bool(args.post_download_fullres),
+                    "smooth_exposure": bool(args.post_render),
+                    "render": bool(args.post_render),
+                    "queue_instagram": bool(auto_publish_instagram),
+                    "publish_instagram": bool(auto_publish_instagram),
+                    "copy_videos_to_mac": bool(args.post_copy_videos_to_mac),
+                    "mac_video_dest": args.post_mac_video_dest,
+                }
+                request_path = run_dir / "postprocess_deferred.json"
+                temporary = request_path.with_suffix(".json.tmp")
+                temporary.write_text(json.dumps(request, indent=2) + "\n", encoding="utf-8")
+                temporary.replace(request_path)
+                post_summary = {
+                    "status": "deferred",
+                    "request": str(request_path),
+                }
+                logger.event("postprocess_workflow_deferred", request=request)
+                logger.human(f"Postprocess deferred:  {request_path}")
+            else:
+                post_summary = run_postprocess(
+                    run_dir,
+                    download_fullres=args.post_download_fullres,
+                    smooth_exposure=args.post_render,
+                    render=args.post_render,
+                    queue_instagram=auto_publish_instagram,
+                    publish_instagram=auto_publish_instagram,
+                    copy_videos_to_mac=args.post_copy_videos_to_mac,
+                    mac_video_dest=args.post_mac_video_dest,
+                )
+                logger.event("postprocess_workflow_completed", summary=post_summary)
+                logger.human(f"Postprocess status:    {post_summary.get('status')}")
+                logger.human(f"Postprocess log:       {run_dir / 'postprocess_workflow.log'}")
             summary["postprocess"] = post_summary
             logger.write_summary(summary)
         elif not normal_finish and (

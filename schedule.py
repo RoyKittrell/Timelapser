@@ -23,6 +23,11 @@ TIMEZONE = "Asia/Kuala_Lumpur"
 # How early the scheduler should preflight each event.
 PREFLIGHT_MINUTES_BEFORE_START = 10
 
+# Hold completed runs when another enabled capture starts within this many
+# hours. After the nearby capture cluster ends, deferred runs are processed
+# oldest-first. Change this single value as the processing buffer is refined.
+POSTPROCESS_DEFER_WINDOW_HOURS = 3.0
+
 # If the Pi starts/reboots after an event start but before event end, the
 # scheduler may start the event late rather than abandoning the day.
 START_LATE_IF_STILL_ACTIVE = True

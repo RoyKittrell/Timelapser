@@ -1,0 +1,10 @@
+[Unit]
+Description=Log Timelapser enclosure temperature and humidity
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=roy
+Group=roy
+WorkingDirectory=/home/roy/Timelapser Sept2026/timelapser_v5
+ExecStart=/home/roy/timelapser-venv/bin/python3 "/home/roy/Timelapser Sept2026/timelapser_v5/environment_monitor.py" --log

@@ -8,12 +8,13 @@ PROFILE="E-M5MKIII-P-BJ8A00203"
 
 install -o root -g root -m 0755 "$ROOT/camera_wifi_connect.sh" "$HELPER"
 
-# Keep internet routing on the external/home adapter while wlan0 talks only to
-# the camera. Retry indefinitely whenever the Olympus SSID becomes available.
+# The Olympus profile is bound to the dedicated adapter by permanent MAC
+# address. Do not also pin it to a volatile wlan number: those names can change
+# when USB radios are moved between ports or detected in a different order.
 /usr/bin/nmcli connection modify "$PROFILE" \
   connection.autoconnect yes \
   connection.autoconnect-retries 0 \
-  connection.interface-name wlan0 \
+  connection.interface-name "" \
   ipv4.never-default yes \
   ipv6.never-default yes
 

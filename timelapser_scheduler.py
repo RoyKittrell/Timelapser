@@ -51,6 +51,8 @@ SCHEDULE_FILE = ROOT / "schedule.py"
 STATE_FILE = ROOT / "scheduler_state.json"
 LOG_FILE = ROOT / "scheduler.log"
 PREFLIGHT_ALERT_FILE = ROOT / "control" / "director_preflight_alert.json"
+SCHEDULER_PAUSE_FILE = ROOT / "control" / "scheduler_paused.json"
+DEFERRED_POSTPROCESS_FILENAME = "postprocess_deferred.json"
 
 POLL_SECONDS = 20
 MISSION_RETRY_DELAYS_SECONDS = (30, 60, 120)
@@ -388,7 +390,118 @@ def build_command(mod, m: Mission, now: datetime) -> list[str]:
         cmd.append("--post-copy-videos-to-mac")
     if m.mac_video_dest:
         cmd.extend(["--post-mac-video-dest", m.mac_video_dest])
+    if m.download_fullres_after or m.render_after or m.copy_videos_to_mac_after:
+        cmd.append("--defer-postprocess")
     return cmd
+
+
+def postprocess_defer_window(mod) -> timedelta:
+    hours = float(getattr(mod, "POSTPROCESS_DEFER_WINDOW_HOURS", 3.0))
+    return timedelta(hours=max(0.0, hours))
+
+
+def nearby_capture(missions: list[Mission], state: dict[str, Any], now: datetime, window: timedelta) -> Mission | None:
+    """Return an active or soon-starting enabled mission that should block processing."""
+    deadline = now + window
+    for mission in missions:
+        if not mission.enabled:
+            continue
+        status = state.get("events", {}).get(mission.key, {}).get("status", "pending")
+        if status in {"complete", "failed_terminal", "missed"}:
+            continue
+        if mission.start_dt <= now < mission.end_dt:
+            return mission
+        if now <= mission.start_dt <= deadline:
+            return mission
+    return None
+
+
+def deferred_requests(output_root: Path) -> list[tuple[datetime, Path, dict[str, Any]]]:
+    requests = []
+    if not output_root.is_dir():
+        return requests
+    for path in output_root.glob(f"*/{DEFERRED_POSTPROCESS_FILENAME}"):
+        try:
+            request = json.loads(path.read_text(encoding="utf-8"))
+            if request.get("status") != "pending":
+                continue
+            created = datetime.fromisoformat(str(request["created_at"]))
+            requests.append((created, path, request))
+        except Exception as exc:
+            log(f"DEFERRED REQUEST INVALID {path}: {type(exc).__name__}: {exc}")
+    return sorted(requests, key=lambda item: (item[0], str(item[1])))
+
+
+def save_deferred_request(path: Path, request: dict[str, Any]) -> None:
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(request, indent=2, default=str) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def reconcile_interrupted_deferred_requests(output_root: Path) -> int:
+    """Return interrupted processing requests to pending after a scheduler restart."""
+    recovered = 0
+    if not output_root.is_dir():
+        return recovered
+    for path in output_root.glob(f"*/{DEFERRED_POSTPROCESS_FILENAME}"):
+        try:
+            request = json.loads(path.read_text(encoding="utf-8"))
+            if request.get("status") != "running":
+                continue
+            request.update(
+                status="pending",
+                interrupted_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+                recovery_count=int(request.get("recovery_count", 0)) + 1,
+            )
+            save_deferred_request(path, request)
+            recovered += 1
+            log(f"RECOVERY {path.parent.name}: interrupted deferred processing -> pending")
+        except Exception as exc:
+            log(f"DEFERRED RECOVERY ERROR {path}: {type(exc).__name__}: {exc}")
+    return recovered
+
+
+def run_one_deferred_postprocess(mod) -> bool:
+    """Process the oldest durable request. Return whether a request was run."""
+    output_root = Path(getattr(mod, "OUTPUT_ROOT", ROOT))
+    requests = deferred_requests(output_root)
+    if not requests:
+        return False
+
+    _, request_path, request = requests[0]
+    run_dir = Path(request.get("run_dir") or request_path.parent)
+    command = [mod.PYTHON, str(ROOT / "timelapser_postprocess_v5.py"), str(run_dir)]
+    if not request.get("download_fullres", False):
+        command.append("--skip-download-fullres")
+    if not request.get("smooth_exposure", False):
+        command.append("--skip-smoothing")
+    if not request.get("render", False):
+        command.append("--skip-render")
+    if not request.get("queue_instagram", False):
+        command.append("--skip-instagram-queue")
+    if not request.get("publish_instagram", False):
+        command.append("--skip-instagram-publish")
+    if not request.get("copy_videos_to_mac", False):
+        command.append("--skip-copy-videos-to-mac")
+    if request.get("mac_video_dest"):
+        command.extend(["--mac-video-dest", str(request["mac_video_dest"])])
+
+    request.update(
+        status="running",
+        processing_started_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+        command=command,
+    )
+    save_deferred_request(request_path, request)
+    log(f"DEFERRED PROCESS START {run_dir.name}")
+    proc = subprocess.run(command, cwd=str(ROOT))
+    request.update(
+        status=("complete" if proc.returncode == 0 else "failed"),
+        returncode=proc.returncode,
+        processing_ended_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+    )
+    save_deferred_request(request_path, request)
+    log(f"DEFERRED PROCESS END {run_dir.name}: returncode={proc.returncode} status={request['status']}")
+    return True
 
 
 def run_mission(mod, m: Mission, state: dict[str, Any], now: datetime) -> int:
@@ -532,6 +645,28 @@ def scheduler_tick(mod, missions: list[Mission], state: dict[str, Any]) -> bool:
     tz = ZoneInfo(mod.TIMEZONE)
     now = datetime.now(tz)
 
+    blocker = nearby_capture(missions, state, now, postprocess_defer_window(mod))
+    if blocker is None:
+        if run_one_deferred_postprocess(mod):
+            return False
+    elif deferred_requests(Path(getattr(mod, "OUTPUT_ROOT", ROOT))):
+        until = max(0.0, (blocker.start_dt - now).total_seconds())
+        log(
+            f"DEFERRED PROCESS HOLD: {blocker.key} "
+            f"is {'active' if blocker.start_dt <= now else f'due in {human_td(until)}'}"
+        )
+
+    paused = SCHEDULER_PAUSE_FILE.exists()
+    previously_paused = getattr(scheduler_tick, "_paused", None)
+    if paused:
+        if previously_paused is not True:
+            log(f"SCHEDULED CAPTURES PAUSED: {SCHEDULER_PAUSE_FILE}")
+        scheduler_tick._paused = True
+        return False
+    if previously_paused is True:
+        log("SCHEDULED CAPTURES RESUMED")
+    scheduler_tick._paused = False
+
     for m in missions:
         if not m.enabled:
             continue
@@ -644,6 +779,7 @@ def main() -> int:
         return 0
 
     reconcile_stale_running_state(state)
+    reconcile_interrupted_deferred_requests(Path(getattr(mod, "OUTPUT_ROOT", ROOT)))
 
     log("Timelapser scheduler started.")
     log(f"Loaded {len(missions)} missions from {SCHEDULE_FILE}")
