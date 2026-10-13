@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from PIL import Image
@@ -55,6 +56,43 @@ def test_capture_simulation_creates_trigger_only_run(tmp_path):
     assert "half_press_clear_complete" in events
     assert not (run_dir / "telemetry.csv").exists()
     assert not (run_dir / "frames_jpeg").exists()
+
+
+def test_capture_wakes_camera_before_autofocus(tmp_path):
+    command = [
+        sys.executable, str(Path(__file__).parent / "timelapser_v6.py"),
+        "--simulate", "--output-root", str(tmp_path),
+        "--interval", "0.5", "--max-frames", "1", "--max-run-minutes", "1",
+        "--wake-pulse", "0.01", "--wake-settle", "0",
+        "--focus-pulse", "0.01", "--focus-settle", "0",
+        "--half-press-clear", "0.01", "--shutter-pulse", "0.01",
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    run_dir = next(tmp_path.glob("*_v6_wired_simulated"))
+    manifest = json.loads((run_dir / "run_manifest.json").read_text())
+    assert manifest["wake_pulse_seconds"] == 0.01
+    events = (run_dir / "capture_events.jsonl").read_text()
+    assert events.index("camera_wake_complete") < events.index("autofocus_started")
+
+
+def test_sunrise_capture_records_adaptive_prediction(tmp_path):
+    event_time = (datetime.now().astimezone() + timedelta(minutes=40)).isoformat()
+    command = [
+        sys.executable, str(Path(__file__).parent / "timelapser_v6.py"),
+        "--simulate", "--skip-autofocus", "--mode", "sunrise",
+        "--event-time", event_time, "--output-root", str(tmp_path),
+        "--interval", "5", "--max-frames", "1", "--max-run-minutes", "1",
+        "--half-press-clear", "0.01", "--shutter-pulse", "0.01",
+    ]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    run_dir = next(tmp_path.glob("*_sunrise_v6_wired_simulated"))
+    manifest = json.loads((run_dir / "run_manifest.json").read_text())
+    assert manifest["adaptive_cadence"] is True
+    timeline = (run_dir / "trigger_timeline.csv").read_text()
+    assert "predicted_shutter_seconds" in timeline
+    assert "6.0" in timeline
 
 
 def test_usb_import_selects_newest_sequence_and_builds_telemetry(tmp_path):

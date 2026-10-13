@@ -115,6 +115,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("run_dir", type=Path)
     parser.add_argument("--device-timeout", type=float, default=45)
+    parser.add_argument("--v6", action="store_true", help="Use the wired V6 sequence importer")
     return parser.parse_args()
 
 
@@ -122,7 +123,7 @@ def main() -> int:
     args = parse_args()
     workflow_started = time.monotonic()
     root = Path(__file__).resolve().parent
-    importer = root / "timelapser_v6_beta_usb_import.py"
+    importer = root / ("timelapser_v6_usb_import.py" if args.v6 else "timelapser_v6_beta_usb_import.py")
     result_code = 1
     port_enabled = False
     device = None

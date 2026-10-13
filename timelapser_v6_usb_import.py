@@ -9,7 +9,7 @@ import json
 import os
 import shutil
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -18,6 +18,7 @@ from PIL import Image, ImageOps
 
 JPEG_EXTENSIONS = {".jpg", ".jpeg"}
 MIN_JPEG_BYTES = 50_000
+CAPTURE_END_TOLERANCE = timedelta(minutes=2)
 
 
 @dataclass(frozen=True)
@@ -113,6 +114,16 @@ def copy_atomic(source: Path, destination: Path) -> None:
     validate_jpeg(destination)
 
 
+def manifest_capture_window(manifest: dict) -> tuple[datetime, datetime]:
+    try:
+        started = datetime.fromisoformat(str(manifest["started_at"]))
+        ended = datetime.fromisoformat(str(manifest["ended_at"]))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("Run manifest lacks a valid capture start/end time") from exc
+    # Olympus EXIF timestamps are local wall-clock values without a UTC offset.
+    return started.replace(tzinfo=None), ended.replace(tzinfo=None) + CAPTURE_END_TOLERANCE
+
+
 def import_run(run_dir: Path, sd_root: Path, *, dry_run: bool = False) -> dict:
     manifest_path = run_dir / "run_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -120,16 +131,33 @@ def import_run(run_dir: Path, sd_root: Path, *, dry_run: bool = False) -> dict:
     if expected < 1:
         raise ValueError("Run manifest has no completed wired triggers")
     available = camera_images(sd_root)
-    if len(available) < expected:
-        raise RuntimeError(f"Camera contains {len(available)} JPEGs but this run triggered {expected}")
+    capture_started, capture_ended = manifest_capture_window(manifest)
+    selected = sorted(
+        (
+            item for item in available
+            if item.captured_at is not None and capture_started <= item.captured_at <= capture_ended
+        ),
+        key=lambda item: (item.captured_at, item.sequence_key),
+    )
+    if not selected:
+        raise RuntimeError(
+            "No camera JPEG has an EXIF capture time inside this run's capture window; "
+            "refusing to import unrelated photographs"
+        )
+    if len(selected) > expected:
+        raise RuntimeError(
+            f"Capture window contains {len(selected)} JPEGs for {expected} relay triggers; "
+            "refusing an ambiguous import"
+        )
 
-    # Wired V6 produces no live camera filenames. Olympus paths increase
-    # monotonically, so the newest N JPEGs are the just-completed sequence.
-    selected = available[-expected:]
     frames_dir = run_dir / "frames_full_jpeg"
+    staging_dir = run_dir / "frames_full_jpeg.importing"
+    if not dry_run:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        staging_dir.mkdir(parents=True)
     rows = []
     for frame, item in enumerate(selected, start=1):
-        destination = frames_dir / f"frame_{frame:06d}.jpg"
+        destination = staging_dir / f"frame_{frame:06d}.jpg"
         if not dry_run:
             copy_atomic(item.path, destination)
             metrics = image_metrics(destination)
@@ -147,15 +175,26 @@ def import_run(run_dir: Path, sd_root: Path, *, dry_run: bool = False) -> dict:
             "frame", "remote_jpg", "source_basename", "time", "actual_iso",
             "actual_aperture", "actual_shutter_seconds", "median", "p05", "p95",
         ]
-        with (run_dir / "telemetry.csv").open("w", encoding="utf-8", newline="") as handle:
+        telemetry_tmp = run_dir / "telemetry.csv.importing"
+        with telemetry_tmp.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=fields)
             writer.writeheader()
             writer.writerows(rows)
+        previous_dir = run_dir / "frames_full_jpeg.previous"
+        shutil.rmtree(previous_dir, ignore_errors=True)
+        if frames_dir.exists():
+            frames_dir.replace(previous_dir)
+        staging_dir.replace(frames_dir)
+        telemetry_tmp.replace(run_dir / "telemetry.csv")
+        shutil.rmtree(previous_dir, ignore_errors=True)
         summary = {
             "status": "complete",
-            "selection_rule": "newest_n_olympus_sequence_paths",
-            "expected_frames": expected,
+            "selection_rule": "exif_capture_time_within_manifest_window",
+            "relay_triggers": expected,
             "imported_frames": len(rows),
+            "unmatched_triggers": expected - len(rows),
+            "capture_window_start": capture_started.isoformat(sep=" "),
+            "capture_window_end": capture_ended.isoformat(sep=" "),
             "first_source": str(selected[0].path),
             "last_source": str(selected[-1].path),
             "telemetry_created_after_capture": True,
@@ -163,7 +202,7 @@ def import_run(run_dir: Path, sd_root: Path, *, dry_run: bool = False) -> dict:
         }
         (run_dir / "v6_usb_import_summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
         return summary
-    return {"status": "dry_run", "expected_frames": expected, "matched_frames": len(rows)}
+    return {"status": "dry_run", "relay_triggers": expected, "matched_frames": len(rows)}
 
 
 def main() -> int:

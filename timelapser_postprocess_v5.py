@@ -311,6 +311,7 @@ def run_postprocess(
     publish_instagram: bool = True,
     copy_videos_to_mac: bool,
     mac_video_dest: str | None = None,
+    initial_completed_steps: tuple[str, ...] = (),
 ) -> dict:
     workflow_started = time.monotonic()
     run_dir = Path(run_dir).expanduser().resolve()
@@ -337,7 +338,7 @@ def run_postprocess(
         log_path,
         status="running",
         current_step="preparing",
-        completed_steps=[],
+        completed_steps=list(initial_completed_steps),
         started_at=summary["started_at"],
         run_dir=str(run_dir),
         publish_instagram=bool(publish_instagram),
@@ -470,8 +471,7 @@ def run_postprocess(
             step = _copy_videos_to_mac(log_path, run_dir, dest, root)
             summary["steps"].append(step)
             if step["returncode"] != 0:
-                summary["status"] = "failed_copy_to_mac"
-                return summary
+                _log(log_path, "Optional copy to Mac failed; continuing the completed media workflow")
 
         if render:
             step = _run_step(
@@ -484,6 +484,16 @@ def run_postprocess(
             if step["returncode"] != 0:
                 summary["status"] = "failed_image_retention"
                 return summary
+
+            step = _run_step(
+                log_path,
+                "update_timelapse_catalog",
+                [python, str(root / "timelapse_catalog.py"), str(run_dir)],
+                root,
+            )
+            summary["steps"].append(step)
+            if step["returncode"] != 0:
+                _log(log_path, "Timelapse catalog update failed; media workflow remains complete")
 
         summary["status"] = "complete"
         return summary

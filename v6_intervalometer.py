@@ -65,12 +65,26 @@ class WiredCamera:
     ) -> None:
         if focus_gpio == shutter_gpio:
             raise ValueError("Focus and shutter GPIOs must be different")
-        if simulate:
-            self.focus = SimulatedOutput(focus_gpio, active_high=not active_low, initial_value=False)
-            self.shutter = SimulatedOutput(shutter_gpio, active_high=not active_low, initial_value=False)
-        else:
-            self.focus = gpiozero_output(focus_gpio, active_low=active_low)
-            self.shutter = gpiozero_output(shutter_gpio, active_low=active_low)
+        self.simulate = simulate
+        self.focus: Output | None = None
+        self.shutter: Output | None = None
+        try:
+            if simulate:
+                self.focus = SimulatedOutput(
+                    focus_gpio, active_high=not active_low, initial_value=False
+                )
+                self.shutter = SimulatedOutput(
+                    shutter_gpio, active_high=not active_low, initial_value=False
+                )
+            else:
+                self.focus = gpiozero_output(focus_gpio, active_low=active_low)
+                self.shutter = gpiozero_output(shutter_gpio, active_low=active_low)
+        except Exception:
+            if self.focus is not None:
+                self.focus.close()
+            if self.shutter is not None:
+                self.shutter.close()
+            raise
         self.closed = False
 
     @staticmethod
@@ -91,6 +105,27 @@ class WiredCamera:
     def take_picture(self, seconds: float) -> PulseResult:
         return self._pulse(self.shutter, seconds)
 
+    def focus_and_take_picture(
+        self,
+        focus_seconds: float,
+        shutter_seconds: float,
+    ) -> PulseResult:
+        """Perform a conventional remote full press with AF held for release."""
+        if focus_seconds <= 0 or shutter_seconds <= 0:
+            raise ValueError("Relay pulse durations must be positive")
+        started = time.monotonic()
+        self.focus.on()
+        try:
+            time.sleep(focus_seconds)
+            self.shutter.on()
+            try:
+                time.sleep(shutter_seconds)
+            finally:
+                self.shutter.off()
+        finally:
+            self.focus.off()
+        return PulseResult(started, time.monotonic())
+
     def clear_half_press(self, seconds: float) -> PulseResult:
         """Cycle AF after shutter-only capture to clear the RM-CB2 state."""
         return self._pulse(self.focus, seconds)
@@ -98,10 +133,23 @@ class WiredCamera:
     def close(self) -> None:
         if self.closed:
             return
-        self.focus.off()
-        self.shutter.off()
-        self.focus.close()
-        self.shutter.close()
+        if self.focus is not None:
+            self.focus.off()
+        if self.shutter is not None:
+            self.shutter.off()
+        if self.focus is not None:
+            self.focus.close()
+        if self.shutter is not None:
+            self.shutter.close()
+        if not self.simulate:
+            # gpiozero's lgpio factory otherwise keeps line reservations alive
+            # in long-running dashboard/scheduler processes after devices close.
+            from gpiozero import Device
+
+            factory = Device.pin_factory
+            if factory is not None:
+                factory.close()
+                Device.pin_factory = None
         self.closed = True
 
     def __enter__(self) -> "WiredCamera":

@@ -13,8 +13,9 @@ This repository contains both the proven V5 Wi-Fi implementation and the current
 V6 currently provides:
 
 - Wired autofocus and shutter control through active-HIGH 5 V relay modules.
-- A two-second autofocus operation at mission startup, shutter-only frame capture, and a final AF pulse that clears the RM-CB2 half-press state.
+- An AF wake pulse and settle delay at mission startup, followed by a two-second autofocus operation, shutter-only frame capture, and a final AF pulse that clears the RM-CB2 half-press state.
 - Deterministic monotonic capture timing without dependence on Olympus Wi-Fi.
+- Sunrise/sunset relay cadence predicted from successful Aperture Priority EXIF curves, with conservative spacing for long exposures and camera busy time.
 - Post-run camera USB mounting and full-resolution JPEG import.
 - Post-import EXIF extraction, brightness analysis, rendering and Instagram publishing.
 - A simplified dashboard that reports only information available during wired capture; image-derived graphs appear after import.
@@ -72,7 +73,7 @@ Shutter relay IN   -> physical pin 18, BCM GPIO24
 
 The installed modules are active-HIGH: HIGH closes the relay and LOW is the safe idle state. Camera common is part of the isolated contact side and must not be connected to Pi ground. Pi 5 V must never be connected to the camera-side `COM`, `NO` or `NC` terminals.
 
-The commissioned sequence holds AF for two seconds, returns GPIO23 LOW, waits 0.75 seconds, and then uses shutter-only pulses on GPIO24. This prevents the camera from refocusing every frame. The RM-CB2 interface retains half-press after shutter-only operation, so V6 finishes with a one-second AF pulse and returns both GPIOs LOW.
+The commissioned sequence first pulses AF for 0.5 seconds to wake a sleeping camera and waits two seconds. It then holds AF for two seconds, returns GPIO23 LOW, waits 0.75 seconds, and uses shutter-only pulses on GPIO24. This prevents the camera from refocusing every frame while allowing normal camera sleep between missions. The RM-CB2 interface retains half-press after shutter-only operation, so V6 finishes with a one-second AF pulse and returns both GPIOs LOW.
 
 ## V6 Architecture
 
@@ -80,12 +81,21 @@ The wired capture flow is:
 
 1. Scheduler or Director starts a mission.
 2. V6 creates the run manifest and trigger timeline.
-3. GPIO23 performs one startup autofocus operation.
+3. GPIO23 wakes the camera, waits for it to become ready, and performs one startup autofocus operation.
 4. GPIO24 triggers each frame while the camera stores JPEGs on its SD card.
 5. After capture, the camera is exposed as USB storage and the newest expected JPEG sequence is imported.
 6. EXIF and brightness telemetry are extracted from the imported images.
 7. Clean and overlay videos are rendered in the established Instagram formats.
 8. Eligible sunrise and sunset missions publish automatically; general missions remain on disk.
+
+For scheduled sunrise and sunset missions, V6 anchors a fitted exposure curve
+to the configured solar-event time. The model was derived from the successful
+2026-10-01 sunrise and 2026-09-30 sunset Aperture Priority runs at ISO 200 and
+approximately f/5.6. It never shortens the requested interval, but lengthens
+relay spacing when the predicted exposure and camera busy time require it.
+General missions retain fixed cadence. Predictions are logged beside every
+trigger for later comparison with imported EXIF; a future ambient-light sensor
+can replace the prediction layer without changing capture ownership.
 
 Important V6 files:
 

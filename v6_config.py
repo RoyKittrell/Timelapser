@@ -18,13 +18,38 @@ FOCUS_GPIO = int(os.environ.get("TIMELAPSER_V6_FOCUS_GPIO", "23"))
 SHUTTER_GPIO = int(os.environ.get("TIMELAPSER_V6_SHUTTER_GPIO", "24"))
 
 RELAY_ACTIVE_LOW = False
+WAKE_PULSE_SECONDS = float(os.environ.get("TIMELAPSER_V6_WAKE_PULSE_SECONDS", "0.5"))
+WAKE_SETTLE_SECONDS = float(os.environ.get("TIMELAPSER_V6_WAKE_SETTLE_SECONDS", "2.0"))
 FOCUS_PULSE_SECONDS = float(os.environ.get("TIMELAPSER_V6_FOCUS_PULSE_SECONDS", "2.0"))
 FOCUS_SETTLE_SECONDS = float(os.environ.get("TIMELAPSER_V6_FOCUS_SETTLE_SECONDS", "0.75"))
 HALF_PRESS_CLEAR_SECONDS = float(os.environ.get("TIMELAPSER_V6_HALF_PRESS_CLEAR_SECONDS", "1.0"))
 SHUTTER_PULSE_SECONDS = float(os.environ.get("TIMELAPSER_V6_SHUTTER_PULSE_SECONDS", "0.15"))
 MIN_INTERVAL_SECONDS = float(os.environ.get("TIMELAPSER_V6_MIN_INTERVAL_SECONDS", "0.5"))
 
+# Optional convenience delivery. Keep disabled while the dashboard and external
+# drive are the primary destinations; set the environment value to 1 to restore it.
+COPY_VIDEOS_TO_MAC = os.environ.get("TIMELAPSER_V6_COPY_VIDEOS_TO_MAC", "0").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+
 STOP_REQUEST = CONTROL_DIR / "stop_requested.json"
 ACTIVE_RUN = CONTROL_DIR / "active_run.json"
 SCHEDULER_PAUSE_FILE = CONTROL_DIR / "scheduler_paused.json"
 PREFLIGHT_ALERT_FILE = CONTROL_DIR / "director_preflight_alert.json"
+CAMERA_ALIVE_STATE = CONTROL_DIR / "camera_alive.json"
+CAMERA_OPERATION_LOCK = CONTROL_DIR / "camera_operation.lock"
+
+# A successful physical camera check in the preflight window can be reused at
+# mission start. The normal scheduler preflight is ten minutes before capture.
+CAMERA_ALIVE_MAX_AGE_SECONDS = float(
+    os.environ.get("TIMELAPSER_V6_CAMERA_ALIVE_MAX_AGE_SECONDS", "900")
+)
+CAMERA_ALIVE_DEVICE_TIMEOUT_SECONDS = float(
+    os.environ.get("TIMELAPSER_V6_CAMERA_ALIVE_DEVICE_TIMEOUT_SECONDS", "45")
+)
+CAMERA_ALIVE_WRITE_SETTLE_SECONDS = float(
+    os.environ.get("TIMELAPSER_V6_CAMERA_ALIVE_WRITE_SETTLE_SECONDS", "10")
+)
+CAMERA_ALIVE_USB_SETTLE_SECONDS = float(
+    os.environ.get("TIMELAPSER_V6_CAMERA_ALIVE_USB_SETTLE_SECONDS", "20")
+)

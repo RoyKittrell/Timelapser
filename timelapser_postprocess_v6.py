@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import datetime
 from pathlib import Path
 
 import timelapser_postprocess_v5 as legacy
+import v6_config
 
 
 def run_postprocess(run_dir: Path, *, publish_instagram: bool = True) -> dict:
@@ -15,6 +17,17 @@ def run_postprocess(run_dir: Path, *, publish_instagram: bool = True) -> dict:
     root = Path(__file__).resolve().parent
     log_path = run_dir / "postprocess_workflow.log"
     python = legacy._python_executable()
+    legacy._write_live_status(
+        log_path,
+        status="running",
+        current_step="import_wired_v6_jpegs_via_mega4_usb",
+        completed_steps=[],
+        started_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+        publish_instagram=bool(publish_instagram),
+        elapsed_seconds=0,
+        ended_at="",
+        error="",
+    )
     import_step = legacy._run_step(
         log_path,
         "import_wired_v6_jpegs_via_mega4_usb",
@@ -27,6 +40,13 @@ def run_postprocess(run_dir: Path, *, publish_instagram: bool = True) -> dict:
         legacy._write_live_status(log_path, status=result["status"], current_step="")
         return result
 
+    learning_step = legacy._run_step(
+        log_path,
+        "update_v6_exposure_model",
+        [python, str(root / "v6_exposure_learning.py"), str(run_dir.parent)],
+        root,
+    )
+
     result = legacy.run_postprocess(
         run_dir,
         download_fullres=False,
@@ -34,9 +54,11 @@ def run_postprocess(run_dir: Path, *, publish_instagram: bool = True) -> dict:
         render=True,
         queue_instagram=True,
         publish_instagram=publish_instagram,
-        copy_videos_to_mac=True,
+        copy_videos_to_mac=v6_config.COPY_VIDEOS_TO_MAC,
+        initial_completed_steps=(import_step["name"], learning_step["name"]),
     )
     result.setdefault("steps", []).insert(0, import_step)
+    result["steps"].insert(1, learning_step)
     result["version"] = "6.0"
     result["graphs_released"] = result.get("status") == "complete"
     (run_dir / "postprocess_workflow_summary.json").write_text(json.dumps(result, indent=2, default=str) + "\n", encoding="utf-8")

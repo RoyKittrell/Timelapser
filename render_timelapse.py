@@ -78,6 +78,23 @@ def read_telemetry(run_dir: Path) -> tuple[list[ExpectedFrame], list[dict]]:
     return expected, rows
 
 
+def fill_missing_telemetry_times(rows: list[dict], run_dir: Path) -> list[dict]:
+    """Use the run clock when a camera has no valid date/time configured."""
+    if rows and all(str(row.get("time", "")).strip() for row in rows):
+        return rows
+
+    manifest_path = run_dir / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    started = datetime.fromisoformat(str(manifest["started_at"]))
+    ended = datetime.fromisoformat(str(manifest["ended_at"]))
+    span = ended - started
+    denominator = max(1, len(rows) - 1)
+    for index, row in enumerate(rows):
+        if not str(row.get("time", "")).strip():
+            row["time"] = (started + span * (index / denominator)).isoformat()
+    return rows
+
+
 def build_source_index(source: Path) -> dict[str, list[Path]]:
     index: dict[str, list[Path]] = {}
     for p in source.rglob("*"):
@@ -625,6 +642,7 @@ def main() -> int:
     overlay_cfg = load_overlay_config(args.overlay_config.expanduser().resolve())
     outputs = args.outputs or list(overlay_cfg.DEFAULT_OUTPUTS)
     expected, telemetry_rows = read_telemetry(run_dir)
+    telemetry_rows = fill_missing_telemetry_times(telemetry_rows, run_dir)
 
     print("="*72); print("TIMELAPSER VIDEO RENDERER V3 — INSTAGRAM + LIVE OVERLAYS")
     print(f"Run:      {run_dir}\nFrames:   {len(expected)}\nProfile:  {args.profile}\nOutput:   {cfg['width']}x{cfg['height']} @ {cfg['fps']:g} fps")

@@ -21,6 +21,7 @@ from datetime import datetime
 from pathlib import Path
 
 import v6_config as config
+from v6_exposure_model import DEFAULT_START_OFFSET_MINUTES, cadence_prediction, model_source
 from v6_intervalometer import WiredCamera
 
 
@@ -51,6 +52,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-root", type=Path, default=config.DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--focus-gpio", type=int, default=config.FOCUS_GPIO)
     parser.add_argument("--shutter-gpio", type=int, default=config.SHUTTER_GPIO)
+    parser.add_argument("--wake-pulse", type=float, default=config.WAKE_PULSE_SECONDS)
+    parser.add_argument("--wake-settle", type=float, default=config.WAKE_SETTLE_SECONDS)
     parser.add_argument("--focus-pulse", type=float, default=config.FOCUS_PULSE_SECONDS)
     parser.add_argument("--focus-settle", type=float, default=config.FOCUS_SETTLE_SECONDS)
     parser.add_argument(
@@ -59,6 +62,17 @@ def parse_args() -> argparse.Namespace:
         default=config.HALF_PRESS_CLEAR_SECONDS,
     )
     parser.add_argument("--shutter-pulse", type=float, default=config.SHUTTER_PULSE_SECONDS)
+    parser.add_argument(
+        "--event-time",
+        type=datetime.fromisoformat,
+        default=None,
+        help="Scheduled sunrise/sunset timestamp, including timezone offset",
+    )
+    parser.add_argument(
+        "--fixed-cadence",
+        action="store_true",
+        help="Disable the sunrise/sunset exposure model and use --interval unchanged",
+    )
     parser.add_argument("--simulate", action="store_true", help="Log timing without touching GPIO")
     parser.add_argument("--skip-autofocus", action="store_true")
     parser.add_argument("--defer-postprocess", action="store_true")
@@ -70,10 +84,16 @@ def validate(args: argparse.Namespace) -> None:
         raise ValueError(f"Interval must be at least {config.MIN_INTERVAL_SECONDS:g}s")
     if args.shutter_pulse >= args.interval:
         raise ValueError("Shutter pulse must be shorter than the capture interval")
+    if args.wake_pulse <= 0 or args.wake_settle < 0:
+        raise ValueError("Wake pulse must be positive and wake settle must not be negative")
     if args.max_frames is not None and args.max_frames < 1:
         raise ValueError("max-frames must be positive")
     if args.max_run_minutes <= 0:
         raise ValueError("max-run-minutes must be positive")
+    if args.focus_gpio == args.shutter_gpio:
+        raise ValueError("Focus and shutter GPIOs must be different")
+    if args.event_time is not None and args.event_time.tzinfo is None:
+        raise ValueError("event-time must include a timezone offset")
     if not args.simulate and (args.focus_gpio is None or args.shutter_gpio is None):
         raise ValueError(
             "Real capture is locked until TIMELAPSER_V6_FOCUS_GPIO and "
@@ -113,6 +133,7 @@ def main() -> int:
         config.STOP_REQUEST.unlink()
 
     started_at = datetime.now().astimezone()
+    adaptive_cadence = args.mode in {"sunrise", "sunset"} and not args.fixed_cadence
     deadline = time.monotonic() + args.max_run_minutes * 60
     estimated_by_time = max(1, math.floor(args.max_run_minutes * 60 / args.interval))
     planned_frames = min(estimated_by_time, args.max_frames) if args.max_frames else estimated_by_time
@@ -122,10 +143,15 @@ def main() -> int:
         "mode": args.mode,
         "started_at": started_at.isoformat(timespec="seconds"),
         "interval_seconds": args.interval,
+        "adaptive_cadence": adaptive_cadence,
+        "event_time": args.event_time.isoformat() if args.event_time else None,
+        "exposure_model_source": model_source(args.mode) if adaptive_cadence else None,
         "max_frames": planned_frames,
         "focus_gpio": args.focus_gpio,
         "shutter_gpio": args.shutter_gpio,
         "relay_active_low": config.RELAY_ACTIVE_LOW,
+        "wake_pulse_seconds": args.wake_pulse,
+        "wake_settle_seconds": args.wake_settle,
         "focus_pulse_seconds": args.focus_pulse,
         "half_press_clear_seconds": args.half_press_clear,
         "shutter_pulse_seconds": args.shutter_pulse,
@@ -151,22 +177,44 @@ def main() -> int:
             shutter_attempted = False
             try:
                 if not args.skip_autofocus:
+                    append_event(events, "camera_wake_started")
+                    wake_pulse = camera.autofocus_once(args.wake_pulse)
+                    append_event(
+                        events,
+                        "camera_wake_complete",
+                        pulse_seconds=wake_pulse.duration_seconds,
+                        settle_seconds=args.wake_settle,
+                    )
+                    time.sleep(args.wake_settle)
                     append_event(events, "autofocus_started")
                     pulse = camera.autofocus_once(args.focus_pulse)
                     append_event(events, "autofocus_complete", pulse_seconds=pulse.duration_seconds)
                     time.sleep(args.focus_settle)
 
                 first_due = time.monotonic()
+                next_due = first_due
                 for frame_number in range(1, planned_frames + 1):
                     if stop or config.STOP_REQUEST.exists() or time.monotonic() >= deadline:
                         break
-                    due = first_due + (frame_number - 1) * args.interval
+                    due = next_due
                     remaining = due - time.monotonic()
                     if remaining > 0:
                         time.sleep(remaining)
                     if stop or config.STOP_REQUEST.exists():
                         break
                     wall_started = datetime.now().astimezone()
+                    elapsed_minutes = (time.monotonic() - first_due) / 60
+                    if args.event_time is not None:
+                        event_offset_minutes = (wall_started - args.event_time).total_seconds() / 60
+                    else:
+                        event_offset_minutes = (
+                            DEFAULT_START_OFFSET_MINUTES.get(args.mode, 0.0) + elapsed_minutes
+                        )
+                    prediction = (
+                        cadence_prediction(args.mode, event_offset_minutes, args.interval)
+                        if adaptive_cadence else None
+                    )
+                    selected_interval = prediction.interval_seconds if prediction else args.interval
                     shutter_attempted = True
                     pulse = camera.take_picture(args.shutter_pulse)
                     row = {
@@ -176,6 +224,10 @@ def main() -> int:
                         "actual_monotonic": pulse.started_monotonic,
                         "schedule_lag_seconds": pulse.started_monotonic - due,
                         "pulse_seconds": pulse.duration_seconds,
+                        "selected_interval_seconds": selected_interval,
+                        "event_offset_minutes": event_offset_minutes if prediction else "",
+                        "predicted_shutter_seconds": prediction.shutter_seconds if prediction else "",
+                        "predicted_busy_seconds": prediction.busy_seconds if prediction else "",
                     }
                     rows.append(row)
                     append_event(events, "shutter_released", **row)
@@ -189,6 +241,7 @@ def main() -> int:
                             "last_trigger_time": row["trigger_time"],
                         },
                     )
+                    next_due = due + selected_interval
             finally:
                 if shutter_attempted:
                     append_event(events, "half_press_clear_started")
@@ -213,7 +266,8 @@ def main() -> int:
     finally:
         fieldnames = [
             "frame", "trigger_time", "scheduled_monotonic", "actual_monotonic",
-            "schedule_lag_seconds", "pulse_seconds",
+            "schedule_lag_seconds", "pulse_seconds", "selected_interval_seconds",
+            "event_offset_minutes", "predicted_shutter_seconds", "predicted_busy_seconds",
         ]
         with triggers.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=fieldnames)

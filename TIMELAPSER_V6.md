@@ -14,8 +14,9 @@ its own SD card.
 - AF is BCM GPIO23 and release is BCM GPIO24.
 - Both module inputs assert HIGH and must be held LOW at process startup,
   failure, signal handling, and normal shutdown.
-- Startup autofocus holds AF for 2 seconds, releases it, then allows a 0.75
-  second settling period before shutter-only capture begins.
+- Startup first holds AF for 0.5 seconds to wake a sleeping camera, releases it,
+  and waits 2 seconds. It then holds AF for 2 seconds to focus, releases it, and
+  allows a 0.75 second settling period before shutter-only capture begins.
 - The RM-CB2 interface retains a half-press state after shutter-only pulses.
   V6 therefore performs a 1 second AF pulse after the final frame, including
   interrupted runs, to clear that state before releasing the GPIO controller.
@@ -84,3 +85,25 @@ The USB importer maps the newest `N` monotonically named Olympus JPEGs to the
 photos between capture and import. A later revision should snapshot the SD
 inventory before capture or add camera-side sequence markers if unattended
 interleaving ever becomes possible.
+
+## Exposure-aware relay cadence
+
+The camera owns Aperture Priority exposure, while V6 cannot read it live.
+`v6_exposure_model.py` therefore predicts shutter speed from minutes relative
+to the scheduled solar event. Its baseline curves came from full-JPEG EXIF in
+the successful 2026-10-01 sunrise and 2026-09-30 sunset runs. After each clean
+V6 import, `v6_exposure_learning.py` rebuilds a calibration from up to 12 recent
+compatible runs. It accepts only complete imports near ISO 200 and f/5.6,
+groups samples into two-minute solar-event bins, and uses the 90th percentile
+shutter speed. The prediction is always the slower of the baseline and learned
+curves, so learning cannot shorten a previously safe cadence.
+
+Sunrise and sunset captures never trigger faster than the schedule's base
+interval. The model lengthens spacing when predicted exposure plus camera busy
+time exceeds that interval, including an extra exposure-sized allowance above
+four seconds for observed long-exposure noise-reduction behavior. `general`
+mode remains fixed cadence. `--fixed-cadence` disables adaptation for attended
+tests, and `--event-time` provides the timezone-aware solar-event anchor.
+The learned calibration is stored atomically at
+`~/.local/share/timelapser/v6_exposure_calibration.json` and its path is
+recorded as the exposure-model source in subsequent run manifests.

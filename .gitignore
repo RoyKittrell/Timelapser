@@ -22,6 +22,7 @@ camera-wifi-wpa2-fix.txt
 *.log
 *.jsonl
 scheduler_state.json
+scheduler_state_v6.json
 control/
 director_test_shots/
 instagram_queue/
