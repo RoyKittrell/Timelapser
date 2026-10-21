@@ -33,6 +33,54 @@ class CameraUsbPortTests(unittest.TestCase):
             camera_usb_port.save_mapping(mapping, state)
             self.assertEqual(camera_usb_port.load_mapping(state), mapping)
 
+    @patch("camera_usb_port.subprocess.run")
+    def test_switch_uses_exact_hub_without_usb3_duality(self, run):
+        mapping = {"hub": "1-1", "port": 3}
+        camera_usb_port.run_switch(mapping, "off")
+        self.assertEqual(
+            run.call_args.args[0],
+            [camera_usb_port.UHUBCTL, "--exact", "-l", "1-1", "-p", "3", "-a", "off"],
+        )
+
+    @patch("camera_usb_port.subprocess.run")
+    def test_unmounts_camera_partition_and_syncs(self, run):
+        run.side_effect = [
+            Mock(
+                returncode=0,
+                stdout=json.dumps({"blockdevices": [
+                    {"path": "/dev/sda", "model": "My Passport", "type": "disk"},
+                    {
+                        "path": "/dev/sdb",
+                        "model": "E-M5MarkIII",
+                        "type": "disk",
+                        "mountpoints": [None],
+                        "children": [
+                            {"path": "/dev/sdb1", "type": "part", "mountpoints": ["/media/roy/OLYMPUS"]},
+                        ],
+                    },
+                ]}),
+            ),
+            Mock(returncode=0),
+            Mock(returncode=0),
+        ]
+
+        self.assertEqual(camera_usb_port.unmount_camera_storage(), ["/dev/sdb1"])
+        self.assertEqual(run.call_args_list[1].args[0], ["umount", "/dev/sdb1"])
+        self.assertEqual(run.call_args_list[2].args[0], ["sync"])
+
+    def test_safe_power_off_unmounts_before_switching(self):
+        mapping = {"hub": "1-1", "port": 3}
+        events = []
+        with patch(
+            "camera_usb_port.unmount_camera_storage",
+            side_effect=lambda: events.append("unmount") or [],
+        ), patch(
+            "camera_usb_port.run_switch",
+            side_effect=lambda *_args: events.append("switch"),
+        ):
+            camera_usb_port.safely_power_off(mapping)
+        self.assertEqual(events, ["unmount", "switch"])
+
     @patch("mega4_usb_import.subprocess.run")
     def test_camera_partition_follows_model_not_device_letter(self, run):
         run.return_value = Mock(

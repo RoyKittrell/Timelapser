@@ -78,6 +78,23 @@ def read_telemetry(run_dir: Path) -> tuple[list[ExpectedFrame], list[dict]]:
     return expected, rows
 
 
+def fill_missing_telemetry_times(rows: list[dict], run_dir: Path) -> list[dict]:
+    """Use the run clock when a camera has no valid date/time configured."""
+    if rows and all(str(row.get("time", "")).strip() for row in rows):
+        return rows
+
+    manifest_path = run_dir / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    started = datetime.fromisoformat(str(manifest["started_at"]))
+    ended = datetime.fromisoformat(str(manifest["ended_at"]))
+    span = ended - started
+    denominator = max(1, len(rows) - 1)
+    for index, row in enumerate(rows):
+        if not str(row.get("time", "")).strip():
+            row["time"] = (started + span * (index / denominator)).isoformat()
+    return rows
+
+
 def build_source_index(source: Path) -> dict[str, list[Path]]:
     index: dict[str, list[Path]] = {}
     for p in source.rglob("*"):
@@ -127,6 +144,11 @@ def write_manifest(path: Path, rows: list[dict]):
 def profile_defaults(name: str):
     profiles = {
         "instagram-reel": dict(width=1080, height=1920, framing="crop", fps=30.0, crf=18, preset="veryfast"),
+        "instagram-reel-hq": dict(
+            width=1080, height=1920, framing="crop", fps=30.0,
+            crf=16, preset="slow", maxrate="20M", bufsize="40M",
+            gop=60, color_standard="bt709",
+        ),
         "instagram-feed": dict(width=1080, height=1350, framing="crop", fps=30.0, crf=18, preset="veryfast"),
         "portrait4k": dict(width=2160, height=3840, framing="crop", fps=30.0, crf=17, preset="veryfast"),
         "4k": dict(width=3840, height=2160, framing="crop", fps=30.0, crf=17, preset="veryfast"),
@@ -135,20 +157,39 @@ def profile_defaults(name: str):
     return profiles[name].copy()
 
 
-def filter_chain(mode: str, width: int, height: int) -> str:
+def filter_chain(mode: str, width: int, height: int, color_standard: str | None = None) -> str:
     if mode == "crop":
-        return f"scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,crop={width}:{height}"
-    if mode == "contain":
-        return f"scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2"
-    raise ValueError(mode)
+        chain = f"scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,crop={width}:{height}"
+    elif mode == "contain":
+        chain = f"scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2"
+    else:
+        raise ValueError(mode)
+    if color_standard == "bt709":
+        chain += (
+            ",scale=in_range=full:out_range=tv:out_color_matrix=bt709"
+            ",format=yuv420p"
+            ",setparams=range=limited:color_primaries=bt709:color_trc=bt709:colorspace=bt709"
+            ",setsar=1"
+        )
+    return chain
 
 
-def encoder_args(crf: int, preset: str, width: int, height: int):
+def encoder_args(cfg: dict):
+    width, height = cfg["width"], cfg["height"]
     # H.264 level 4.2 is suitable for 1080-class outputs; use 5.1 for 4K-class output.
     level = "5.1" if width * height > 1920 * 1080 else "4.2"
-    return ["-c:v", "libx264", "-preset", preset, "-crf", str(crf),
-            "-profile:v", "high", "-level", level, "-pix_fmt", "yuv420p",
-            "-movflags", "+faststart", "-threads", "0"]
+    args = ["-c:v", "libx264", "-preset", cfg["preset"], "-crf", str(cfg["crf"]),
+            "-profile:v", "high", "-level", level, "-pix_fmt", "yuv420p"]
+    if cfg.get("maxrate"):
+        args += ["-maxrate", str(cfg["maxrate"]), "-bufsize", str(cfg["bufsize"])]
+    if cfg.get("gop"):
+        gop = str(cfg["gop"])
+        args += ["-g", gop, "-keyint_min", gop, "-sc_threshold", "0",
+                 "-x264-params", "open-gop=0"]
+    if cfg.get("color_standard") == "bt709":
+        args += ["-color_range", "tv", "-colorspace", "bt709",
+                 "-color_primaries", "bt709", "-color_trc", "bt709"]
+    return args + ["-movflags", "+faststart", "-threads", "0"]
 
 
 def load_overlay_config(path: Path):
@@ -556,7 +597,7 @@ def make_overlay_frames(kind: str, rows: list[dict], expected: list[ExpectedFram
 
 def run_ffmpeg(stage: Path, overlay_dir: Path | None, start_frame: int, cfg: dict, output: Path, overwrite: bool):
     fps, w, h = cfg["fps"], cfg["width"], cfg["height"]
-    base_vf = filter_chain(cfg["framing"], w, h)
+    base_vf = filter_chain(cfg["framing"], w, h, cfg.get("color_standard"))
     cmd = ["ffmpeg", "-hide_banner", "-stats", "-y" if overwrite else "-n",
            "-framerate", str(fps), "-start_number", str(start_frame), "-i", str(stage / "frame_%06d.jpg")]
     if overlay_dir is None:
@@ -565,7 +606,7 @@ def run_ffmpeg(stage: Path, overlay_dir: Path | None, start_frame: int, cfg: dic
         cmd += ["-framerate", str(fps), "-start_number", str(start_frame), "-i", str(overlay_dir / "overlay_%06d.png"),
                 "-filter_complex", f"[0:v]{base_vf}[base];[1:v]format=rgba[ov];[base][ov]overlay=0:0:format=auto[outv]",
                 "-map", "[outv]", "-r", str(fps)]
-    cmd += encoder_args(cfg["crf"], cfg["preset"], w, h) + ["-an", str(output)]
+    cmd += encoder_args(cfg) + ["-an", str(output)]
     print("\n" + " ".join(f'\"{x}\"' if " " in x else x for x in cmd))
     started = time.monotonic(); proc = subprocess.run(cmd); return proc.returncode, time.monotonic()-started
 
@@ -573,7 +614,7 @@ def run_ffmpeg(stage: Path, overlay_dir: Path | None, start_frame: int, cfg: dic
 def main() -> int:
     p = argparse.ArgumentParser(description="Timelapser V3 renderer: clean + live telemetry overlay videos.")
     p.add_argument("run_dir", type=Path); p.add_argument("--source", type=Path, required=True)
-    p.add_argument("--profile", choices=["instagram-reel","instagram-feed","portrait4k","4k","native43"], default="instagram-reel")
+    p.add_argument("--profile", choices=["instagram-reel","instagram-reel-hq","instagram-feed","portrait4k","4k","native43"], default="instagram-reel")
     p.add_argument("--outputs", nargs="+", choices=["clean","brightness","director"], default=None,
                    help="Videos to make. Default comes from overlay_config.py (clean brightness director).")
     p.add_argument("--overlay-config", type=Path, default=Path(__file__).with_name("overlay_config.py"))
@@ -601,6 +642,7 @@ def main() -> int:
     overlay_cfg = load_overlay_config(args.overlay_config.expanduser().resolve())
     outputs = args.outputs or list(overlay_cfg.DEFAULT_OUTPUTS)
     expected, telemetry_rows = read_telemetry(run_dir)
+    telemetry_rows = fill_missing_telemetry_times(telemetry_rows, run_dir)
 
     print("="*72); print("TIMELAPSER VIDEO RENDERER V3 — INSTAGRAM + LIVE OVERLAYS")
     print(f"Run:      {run_dir}\nFrames:   {len(expected)}\nProfile:  {args.profile}\nOutput:   {cfg['width']}x{cfg['height']} @ {cfg['fps']:g} fps")
@@ -665,13 +707,17 @@ def main() -> int:
         "run_dir":str(run_dir), "source_dir":str(source), "profile":args.profile,
         "frames":len(expected), "fps":cfg["fps"], "width":cfg["width"], "height":cfg["height"],
         "framing":cfg["framing"], "preset":cfg["preset"], "crf":cfg["crf"], "outputs":results,
+        "maxrate":cfg.get("maxrate"), "bufsize":cfg.get("bufsize"),
+        "gop":cfg.get("gop"), "color_standard":cfg.get("color_standard"),
         "overlay_config":str(args.overlay_config.expanduser().resolve()),
         "brightness_source": args.brightness_source,
         "exposure_metadata_source": exposure_metadata_source,
         "air_quality": air_quality,
         "status":"complete" if results and all(r["returncode"]==0 for r in results) and len(results)==len(outputs) else "failed",
     }
-    (run_dir / "render_summary_v3.json").write_text(json.dumps(summary,indent=2),encoding="utf-8")
+    summary_suffix = args.output_stem_suffix.strip("_-")
+    summary_name = f"render_summary_v3_{summary_suffix}.json" if summary_suffix else "render_summary_v3.json"
+    (run_dir / summary_name).write_text(json.dumps(summary,indent=2),encoding="utf-8")
     if not args.keep_stage: shutil.rmtree(stage, ignore_errors=True)
     if summary["status"] != "complete": return next((r["returncode"] for r in results if r["returncode"]),1)
 

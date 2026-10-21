@@ -10,6 +10,7 @@ LOCK_FILE="/run/lock/timelapser-nightly-backup.lock"
 TODAY="$(date +%F)"
 FINAL_DIR="$BACKUP_ROOT/$TODAY"
 WORK_DIR="$BACKUP_ROOT/.incomplete-$TODAY-$$"
+MAINTENANCE_CLEANUP="/usr/local/sbin/timelapser-maintenance-cleanup"
 
 log() {
     printf '%s  %s\n' "$(date --iso-8601=seconds)" "$*"
@@ -18,6 +19,14 @@ log() {
 fail_soft() {
     log "SKIP: $*"
     exit 0
+}
+
+run_maintenance_cleanup() {
+    if [[ ! -x "$MAINTENANCE_CLEANUP" ]]; then
+        log "WARNING: maintenance cleanup helper is not installed"
+        return
+    fi
+    "$MAINTENANCE_CLEANUP" || log "WARNING: transient test-shot cleanup failed"
 }
 
 cleanup() {
@@ -39,6 +48,7 @@ drive_uuid="$(lsblk -no UUID "$drive_source" 2>/dev/null | head -n1 | tr -d '[:s
 
 if [[ -f "$FINAL_DIR/COMPLETE" ]]; then
     log "OK: verified backup already exists for $TODAY"
+    run_maintenance_cleanup
     exit 0
 fi
 
@@ -111,5 +121,7 @@ for old in "${old_backups[@]}"; do
     log "ROTATE: removing expired backup $old"
     rm -rf -- "$BACKUP_ROOT/$old"
 done
+
+run_maintenance_cleanup
 
 trap - EXIT

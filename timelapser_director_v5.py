@@ -46,6 +46,7 @@ PYTHON = Path('/home/roy/timelapser-venv/bin/python3')
 TIMELAPSER_SCRIPT = V5_ROOT / 'timelapser_v5.py'
 CONTROL_DIR = V5_ROOT / 'control'
 STOP_REQUEST_FILE = CONTROL_DIR / 'stop_requested.json'
+SCHEDULER_PAUSE_FILE = CONTROL_DIR / 'scheduler_paused.json'
 DIRECTOR_CONTROL_LOG = CONTROL_DIR / 'director_control.log'
 PREFLIGHT_ALERT_FILE = CONTROL_DIR / 'director_preflight_alert.json'
 TEST_SHOTS_DIR = V5_ROOT / 'director_test_shots'
@@ -53,6 +54,7 @@ TEST_SHOT_RETENTION = 12
 TEST_SHOT_RUN_WINDOW = timedelta(hours=2)
 REBOOT_HELPER = Path('/usr/local/sbin/timelapser-reboot')
 CAMERA_WIFI_HELPER = Path('/usr/local/sbin/timelapser-camera-wifi')
+CAMERA_USB_HELPER = Path('/usr/local/sbin/timelapser-camera-usb')
 HOME_WIFI_PROFILE = 'netplan-wlan0-_A29-01'
 CAMERA_WIFI_PROFILE = 'E-M5MKIII-P-BJ8A00203'
 CAMERA_INFO_URL = 'http://192.168.0.10/get_caminfo.cgi'
@@ -738,12 +740,37 @@ def parse_schedule_command(text: str) -> dict[str, Any] | None:
 
 def parse_operator_command(text: str) -> dict[str, Any] | None:
     t = text.lower().strip()
+
+    if has_timelapse_word(t) and re.search(r'\b(pause|disable|suspend)\b', t) and re.search(
+        r'\b(schedule|scheduled|automatic|future|all)\b', t
+    ):
+        return {'action': 'pause_scheduler', 'reason': text.strip()}
+
+    if has_timelapse_word(t) and re.search(r'\b(resume|enable|unpause)\b', t) and re.search(
+        r'\b(schedule|scheduled|automatic|future|all)\b', t
+    ):
+        return {'action': 'resume_scheduler', 'reason': text.strip()}
+
+    if re.search(r'\b(eject|unmount|disconnect|unplug|release)\b', t) and re.search(
+        r'\b(camera|olympus)\b', t
+    ):
+        return {'action': 'disconnect_camera_usb'}
+
     if re.search(r'\b(connect|join|reconnect)\b', t) and re.search(r'\b(camera|olympus)\b', t):
         return {'action': 'connect_camera_wifi'}
 
     if re.search(r'\b(reboot|restart)\b', t) and re.search(r'\b(pi|raspberry|system|machine)\b', t):
         return {
             'action': 'reboot',
+            'force': bool(re.search(r'\b(force|anyway|even if busy)\b', t)),
+            'reason': text.strip(),
+        }
+
+    if re.search(r'\b(shut\s*down|shutdown|power\s*off|turn\s*off)\b', t) and re.search(
+        r'\b(pi|raspberry|system|machine)\b', t
+    ):
+        return {
+            'action': 'shutdown',
             'force': bool(re.search(r'\b(force|anyway|even if busy)\b', t)),
             'reason': text.strip(),
         }
@@ -1728,6 +1755,44 @@ def request_pi_reboot(*, force: bool, reason: str) -> str:
     return f'Reboot was not scheduled (exit {cp.returncode}). {output or "No diagnostic output."}'
 
 
+def request_pi_shutdown(*, force: bool, reason: str) -> str:
+    command = ['sudo', '-n', str(REBOOT_HELPER), 'force-shutdown' if force else 'shutdown']
+    try:
+        cp = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=8,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return 'The shutdown helper did not respond in time, so I cannot confirm a shutdown was scheduled.'
+    except OSError as exc:
+        return f'I could not invoke the shutdown helper: {type(exc).__name__}: {exc}'
+
+    output = (cp.stdout or cp.stderr or '').strip()
+    append_control_log({
+        'action': 'shutdown_requested',
+        'force': force,
+        'reason': reason,
+        'returncode': cp.returncode,
+        'output': output,
+    })
+    if cp.returncode == 0:
+        return (
+            'Raspberry Pi shutdown scheduled. The dashboard will go offline in about five seconds. '
+            'Physical power must be restored or cycled to start the Pi again.'
+        )
+    if cp.returncode == 3:
+        return (
+            'I refused to shut down because a capture or postprocessing job is active. '
+            'Let it finish, or explicitly say "force shutdown the Raspberry Pi" if interruption is intentional.'
+        )
+    if cp.returncode == 4:
+        return 'A reboot or shutdown is already scheduled.'
+    return f'Shutdown was not scheduled (exit {cp.returncode}). {output or "No diagnostic output."}'
+
+
 def request_camera_wifi_connect() -> str:
     command = [
         '/usr/bin/timeout', '30', 'sudo', '-n',
@@ -1793,6 +1858,45 @@ def request_camera_wifi_connect() -> str:
     )
 
 
+def request_camera_usb_disconnect() -> str:
+    active = active_v5_processes()
+    if active:
+        return (
+            f"I refused to disconnect the camera USB while `{active[0]['script']}` is active "
+            f"under PID {active[0]['pid']}. Stop or finish that run first."
+        )
+    try:
+        cp = subprocess.run(
+            ['sudo', '-n', str(CAMERA_USB_HELPER), 'discover-and-off'],
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return 'The camera USB helper timed out. No unverified hub port was changed.'
+    except Exception as exc:
+        return f'I could not invoke the camera USB helper: {type(exc).__name__}: {exc}'
+
+    output = (cp.stdout or cp.stderr or '').strip()
+    append_control_log({
+        'action': 'disconnect_camera_usb',
+        'returncode': cp.returncode,
+        'output': output,
+    })
+    if cp.returncode != 0:
+        return f'The camera USB helper refused the operation: `{output or "unknown error"}`'
+    if 'not visible' in output.lower():
+        return (
+            'The Olympus camera is already absent from USB, so every hub port was left unchanged. '
+            'The hard drive was not touched; you can turn on camera Wi-Fi now.'
+        )
+    return (
+        'The Olympus camera was safely unmounted and its discovered MEGA4 port was switched off. '
+        'The hard drive was not touched; you can turn on camera Wi-Fi now.'
+    )
+
+
 def handle_operator_command(text: str, current_run_dir: Path) -> str | None:
     cmd = parse_operator_command(text)
     if cmd is None:
@@ -1803,15 +1907,46 @@ def handle_operator_command(text: str, current_run_dir: Path) -> str | None:
         return show_test_shot(current_run_dir)
     if cmd['action'] == 'stop':
         return request_timelapse_stop(cmd['reason'])
+    if cmd['action'] == 'pause_scheduler':
+        return set_scheduler_paused(True, cmd['reason'])
+    if cmd['action'] == 'resume_scheduler':
+        return set_scheduler_paused(False, cmd['reason'])
     if cmd['action'] == 'reboot':
         return request_pi_reboot(force=cmd['force'], reason=cmd['reason'])
+    if cmd['action'] == 'shutdown':
+        return request_pi_shutdown(force=cmd['force'], reason=cmd['reason'])
     if cmd['action'] == 'connect_camera_wifi':
         return request_camera_wifi_connect()
+    if cmd['action'] == 'disconnect_camera_usb':
+        return request_camera_usb_disconnect()
     if cmd['action'] == 'schedule_future':
         return schedule_future_timelapse(cmd)
     if cmd['action'] == 'start_now':
         return start_timelapse_now(cmd)
     return None
+
+
+def set_scheduler_paused(paused: bool, reason: str = '') -> str:
+    CONTROL_DIR.mkdir(parents=True, exist_ok=True)
+    if paused:
+        payload = {
+            'paused': True,
+            'requested_at': datetime.now().astimezone().isoformat(timespec='seconds'),
+            'reason': reason or 'operator requested pause',
+            'source': 'timelapser_director_v5',
+        }
+        temp = SCHEDULER_PAUSE_FILE.with_suffix('.tmp')
+        temp.write_text(json.dumps(payload, indent=2), encoding='utf-8')
+        temp.replace(SCHEDULER_PAUSE_FILE)
+        append_control_log({'action': 'scheduler_paused', 'reason': payload['reason']})
+        return (
+            'Scheduled timelapses are paused. This persists across reboots. '
+            'Existing files and postprocessing are unaffected, and no new scheduled capture will start.'
+        )
+
+    SCHEDULER_PAUSE_FILE.unlink(missing_ok=True)
+    append_control_log({'action': 'scheduler_resumed', 'reason': reason or 'operator requested resume'})
+    return 'Scheduled timelapses are enabled again.'
 
 
 def home_wifi_status() -> tuple[str, str]:
@@ -1975,6 +2110,17 @@ run_dir = runs[run_names.index(selected_name)]
 
 st.sidebar.markdown('### Director')
 st.sidebar.caption('Observer plus constrained start/stop controls. Camera commands remain owned by timelapser_v5.py.')
+scheduled_captures_paused = SCHEDULER_PAUSE_FILE.exists()
+if scheduled_captures_paused:
+    st.sidebar.warning('Scheduled captures paused')
+    if st.sidebar.button('Resume scheduled captures', use_container_width=True):
+        set_scheduler_paused(False, 'dashboard button')
+        st.rerun()
+else:
+    st.sidebar.success('Scheduled captures enabled')
+    if st.sidebar.button('Pause scheduled captures', use_container_width=True):
+        set_scheduler_paused(True, 'dashboard button')
+        st.rerun()
 st.sidebar.caption(f'Auto-refresh: {REFRESH_SECONDS}s')
 st.sidebar.code(str(run_dir), language=None)
 show_latest_frame = st.sidebar.toggle(
@@ -2156,7 +2302,7 @@ if chat_key not in st.session_state:
     st.session_state[chat_key] = []
 
 with st.expander('Ask the AI Director', expanded=False):
-    st.caption('Chat over telemetry, run a preflight, control timelapses, or safely reboot the Raspberry Pi.')
+    st.caption('Chat over telemetry, run a preflight, pause or resume scheduled captures, control timelapses, or safely reboot/shut down the Raspberry Pi.')
 
     for msg in st.session_state[chat_key]:
         with st.chat_message(msg['role']):
@@ -2207,7 +2353,7 @@ V5 facts:
 - Median brightness, highlights_pct and shadows_pct come from each downloaded JPEG.
 - This Director may start an ad-hoc validated timelapser_v5.py run or request graceful stop through a control file.
 - The Director may activate the saved Olympus Wi-Fi profile through a fixed privileged helper, then verify the camera API without disturbing the separate home-network adapter.
-- The Director may request a guarded Raspberry Pi reboot through a fixed privileged helper. It refuses while capture or postprocessing is active unless the operator explicitly forces it.
+- The Director may request a guarded Raspberry Pi reboot or shutdown through a fixed privileged helper. It refuses while capture or postprocessing is active unless the operator explicitly forces it.
 - The Director still has no direct camera authority and never sends Olympus camera commands itself.
 
 Be concise but technically useful. If evidence is missing, say so.'''

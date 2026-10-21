@@ -1,0 +1,17 @@
+[Unit]
+Description=Timelapser V6 wired dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=roy
+WorkingDirectory=/home/roy/Timelapser Sept2026/timelapser_v5
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/roy/timelapser-venv/bin/streamlit run timelapser_director_v6.py --server.address 0.0.0.0 --server.port 8501 --server.headless true
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+

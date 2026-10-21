@@ -14,6 +14,11 @@ sha256sum -c SHA256SUMS
 
 Only folders containing `COMPLETE` have passed archive and checksum checks.
 
+After a backup is verified and published, the maintenance cleanup removes the
+transient V5 and V6 dashboard test-shot caches from the live Pi. Those test
+shots remain represented inside the backup that just completed. Failed or
+skipped backups do not trigger cleanup.
+
 ## Restore to a replacement card
 
 1. Use Raspberry Pi Imager to install the same Raspberry Pi OS architecture

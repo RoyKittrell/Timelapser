@@ -11,17 +11,27 @@ __pycache__/
 *.token
 *.secret
 env/
+camera-wifi-reset.txt
+camera-wifi-wpa2-fix.txt
+
+# macOS and local Codex working state
+.DS_Store
+.codex_work/
 
 # Timelapser generated state and logs
 *.log
 *.jsonl
 scheduler_state.json
+scheduler_state_v6.json
 control/
 director_test_shots/
 instagram_queue/
 instagram_publish_receipt.json
 photos_imports.tsv
 .photos_import.lock
+control_v6/
+outputs/
+result.json
 
 # Timelapse run folders and rendered/transferred media
 20[0-9][0-9][0-9][0-9][0-9][0-9]_*/
@@ -53,3 +63,19 @@ v6_beta_usb_import_summary_*.json
 # Local backups and one-off archived files
 Old/
 *.zip
+pi_patch_live/
+pi_v5_patch/
+pi_v5_work/
+remote_edit/
+staging_obsidian/
+*.pre-*
+*.patched
+*.recreate
+*.remote
+
+# Personal operations notes are backed up separately from the public codebase
+obsidian_timelapser/
+
+# Vendored research repositories and generated dependency trees
+github_research/
+**/.pydeps/

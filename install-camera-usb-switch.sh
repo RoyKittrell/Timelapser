@@ -12,17 +12,10 @@ EOF
 chmod 0440 "$SUDOERS"
 visudo -cf "$SUDOERS"
 
-# Record the presently connected Olympus port before cutting its power.
-"$HELPER" discover
-sync
-camera_disk=$(lsblk -dnpo PATH,MODEL | awk '$0 ~ /E-M5MarkIII/ {print $1; exit}')
-if [[ -n "${camera_disk:-}" ]]; then
-  while read -r partition kind; do
-    if [[ "$kind" == "part" ]] && findmnt -rn -S "$partition" >/dev/null; then
-      umount "$partition"
-    fi
-  done < <(lsblk -nrpo PATH,TYPE "$camera_disk")
-fi
+# Discover, safely unmount, sync, and disconnect when the camera is visible.
+# The helper deliberately succeeds when the port is already off, allowing
+# installation and service recovery without reconnecting the camera first.
+"$HELPER" discover-and-off
 
 install -o root -g root -m 0644 "$ROOT/timelapser-scheduler.service" /etc/systemd/system/timelapser-scheduler.service
 systemctl daemon-reload
