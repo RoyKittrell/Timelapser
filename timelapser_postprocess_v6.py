@@ -52,16 +52,36 @@ def run_postprocess(run_dir: Path, *, publish_instagram: bool = True) -> dict:
         download_fullres=False,
         smooth_exposure=True,
         render=True,
-        queue_instagram=True,
+        # A non-publishing test must not leave a latent queue item that an
+        # automatic publisher could upload later.
+        queue_instagram=publish_instagram,
         publish_instagram=publish_instagram,
         copy_videos_to_mac=v6_config.COPY_VIDEOS_TO_MAC,
         initial_completed_steps=(import_step["name"], learning_step["name"]),
     )
     result.setdefault("steps", []).insert(0, import_step)
     result["steps"].insert(1, learning_step)
+    if result.get("status") == "complete":
+        cleanup_step = legacy._run_step(
+            log_path,
+            "erase_camera_sd_after_success",
+            [python, str(root / "erase_camera_sd_after_success.py"), str(run_dir)],
+            root,
+        )
+        result["steps"].append(cleanup_step)
+        if cleanup_step["returncode"] != 0:
+            result["status"] = "failed_camera_sd_cleanup"
     result["version"] = "6.0"
     result["graphs_released"] = result.get("status") == "complete"
     (run_dir / "postprocess_workflow_summary.json").write_text(json.dumps(result, indent=2, default=str) + "\n", encoding="utf-8")
+    legacy._write_live_status(
+        log_path,
+        status=result["status"],
+        current_step="",
+        elapsed_seconds=result.get("elapsed_seconds", 0),
+        ended_at=result.get("ended_at", ""),
+        error=result.get("error", ""),
+    )
     return result
 
 

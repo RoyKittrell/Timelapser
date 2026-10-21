@@ -92,7 +92,11 @@ def _run_camera_alive_test_locked(mission_key: str) -> dict:
         active_low=v6_config.RELAY_ACTIVE_LOW,
     ) as camera:
         camera.take_picture(v6_config.SHUTTER_PULSE_SECONDS)
-        time.sleep(v6_config.CAMERA_ALIVE_WRITE_SETTLE_SECONDS)
+        # The camera is in aperture priority and may still be exposing long
+        # after the relay releases. AF cleanup during that exposure can disturb
+        # the remote state, while enabling USB too early makes a valid delayed
+        # JPEG look like a failed capture.
+        time.sleep(v6_config.CAMERA_ALIVE_CAPTURE_SETTLE_SECONDS)
         camera.clear_half_press(v6_config.HALF_PRESS_CLEAR_SECONDS)
 
     time.sleep(v6_config.CAMERA_ALIVE_USB_SETTLE_SECONDS)

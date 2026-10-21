@@ -176,16 +176,16 @@ def main() -> int:
         ) as camera:
             shutter_attempted = False
             try:
+                append_event(events, "camera_wake_started")
+                wake_pulse = camera.autofocus_once(args.wake_pulse)
+                append_event(
+                    events,
+                    "camera_wake_complete",
+                    pulse_seconds=wake_pulse.duration_seconds,
+                    settle_seconds=args.wake_settle,
+                )
+                time.sleep(args.wake_settle)
                 if not args.skip_autofocus:
-                    append_event(events, "camera_wake_started")
-                    wake_pulse = camera.autofocus_once(args.wake_pulse)
-                    append_event(
-                        events,
-                        "camera_wake_complete",
-                        pulse_seconds=wake_pulse.duration_seconds,
-                        settle_seconds=args.wake_settle,
-                    )
-                    time.sleep(args.wake_settle)
                     append_event(events, "autofocus_started")
                     pulse = camera.autofocus_once(args.focus_pulse)
                     append_event(events, "autofocus_complete", pulse_seconds=pulse.duration_seconds)

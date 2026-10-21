@@ -24,7 +24,6 @@ import v6_config
 import mega4_usb_import
 import timelapser_scheduler as scheduler_core
 from enclosure_sensor import read_sht3x
-from v6_camera_alive import run_camera_alive_test
 from v6_intervalometer import WiredCamera
 
 
@@ -77,14 +76,21 @@ st.markdown(
 
 
 def next_scheduled_mission():
-    schedule_path = Path(__file__).resolve().parent / "schedule_v6.py"
-    spec = importlib.util.spec_from_file_location("dashboard_schedule_v6", schedule_path)
+    # schedule_v6 imports schedule.py with ``from schedule import *``. In this
+    # long-running Streamlit process that underlying module can remain cached
+    # after the calendar is regenerated, so read the mission source directly.
+    schedule_path = Path(__file__).resolve().parent / "schedule.py"
+    spec = importlib.util.spec_from_file_location("dashboard_schedule", schedule_path)
     if spec is None or spec.loader is None:
         return None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     now = datetime.now().astimezone()
-    future = [mission for mission in scheduler_core.build_missions(module) if mission.end_dt > now]
+    future = [
+        mission
+        for mission in scheduler_core.build_missions(module)
+        if mission.enabled and mission.end_dt > now
+    ]
     return min(future, key=lambda mission: mission.start_dt) if future else None
 
 
@@ -519,6 +525,18 @@ def render_workflow_overview(run_dir: Path, manifest: dict) -> None:
 
 
 def render_primary_status() -> None:
+    streak, total_published = publication_counts()
+    reliability_cols = st.columns(2)
+    reliability_cols[0].metric(
+        "Autonomous IG streak",
+        f"{streak} timelapse{'s' if streak != 1 else ''}",
+    )
+    reliability_cols[1].metric(
+        "Published timelapses",
+        str(total_published),
+    )
+    st.caption("Consecutive scheduled sunrise/sunset runs successfully published to Instagram.")
+
     active = read_json(v6_config.ACTIVE_RUN)
     active_dir = Path(str(active.get("run_dir") or ""))
     if active.get("status") in {"starting", "capturing"} and active_dir.is_dir():
@@ -596,6 +614,48 @@ def runs() -> list[Path]:
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
+
+
+def publication_counts() -> tuple[int, int]:
+    streak = 0
+    total_published = 0
+    streak_intact = True
+    # Run names begin with YYYYMMDD_HHMMSS and are the capture chronology;
+    # modification times change later during retries and maintenance.
+    for run_dir in sorted(runs(), key=lambda path: path.name, reverse=True):
+        manifest = read_json(run_dir / "run_manifest.json")
+        capture_status = str(manifest.get("status") or "")
+        post_summary = read_json(run_dir / "postprocess_workflow_summary.json")
+        live_summary = read_json(run_dir / "postprocess_live_status.json")
+        publish_receipt = read_json(run_dir / "instagram_publish_receipt.json")
+        post_status = str(post_summary.get("status") or "")
+
+        # General and manual tests are outside the autonomous publishing streak.
+        if str(manifest.get("mode") or "") not in {"sunrise", "sunset"}:
+            continue
+
+        # A run still capturing or processing has not earned or broken the streak.
+        if capture_status in {"starting", "capturing"}:
+            continue
+        if live_summary.get("status") == "running":
+            continue
+
+        finalized = (
+            capture_status.startswith(("failed", "aborted", "stopped"))
+            or (post_status and post_status not in {"running", "waiting"})
+            or bool(publish_receipt)
+        )
+        if not finalized:
+            continue
+
+        published = publish_receipt.get("status") == "complete"
+        if published:
+            total_published += 1
+            if streak_intact:
+                streak += 1
+        else:
+            streak_intact = False
+    return streak, total_published
 
 
 def count_rows(path: Path) -> int:
@@ -875,15 +935,7 @@ def run_director_preflight() -> str:
         ok = False
         checks.append("FAIL gpiozero is unavailable")
 
-    if ok:
-        try:
-            result = run_camera_alive_test("manual_preflight")
-            created = result.get("created_and_deleted", [])
-            name = Path(created[-1]).name if created else "new JPEG"
-            checks.append(f"OK camera alive: captured, verified, and deleted {name}")
-        except Exception as exc:
-            ok = False
-            checks.append(f"FAIL camera alive test: {type(exc).__name__}: {exc}")
+    checks.append("OK camera USB left untouched; physical capture is not tested during preflight")
 
     heading = "PREFLIGHT PASSED" if ok else "PREFLIGHT ATTENTION NEEDED"
     return heading + "\n\n" + "\n".join(f"- {line}" for line in checks)

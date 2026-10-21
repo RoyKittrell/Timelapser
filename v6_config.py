@@ -47,8 +47,11 @@ CAMERA_ALIVE_MAX_AGE_SECONDS = float(
 CAMERA_ALIVE_DEVICE_TIMEOUT_SECONDS = float(
     os.environ.get("TIMELAPSER_V6_CAMERA_ALIVE_DEVICE_TIMEOUT_SECONDS", "45")
 )
-CAMERA_ALIVE_WRITE_SETTLE_SECONDS = float(
-    os.environ.get("TIMELAPSER_V6_CAMERA_ALIVE_WRITE_SETTLE_SECONDS", "10")
+# Total time after the shutter pulse for the aperture-priority exposure and SD
+# write to complete before AF cleanup. Night testing currently peaks near six
+# seconds, so 15 seconds provides comfortable headroom without delaying preflight.
+CAMERA_ALIVE_CAPTURE_SETTLE_SECONDS = float(
+    os.environ.get("TIMELAPSER_V6_CAMERA_ALIVE_CAPTURE_SETTLE_SECONDS", "15")
 )
 CAMERA_ALIVE_USB_SETTLE_SECONDS = float(
     os.environ.get("TIMELAPSER_V6_CAMERA_ALIVE_USB_SETTLE_SECONDS", "20")

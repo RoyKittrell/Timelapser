@@ -105,9 +105,11 @@ def expected_shutter_seconds(mode: str, event_offset_minutes: float) -> float | 
 
 
 def expected_busy_seconds(shutter_seconds: float) -> float:
-    # The source runs show an exposure-sized extra delay above about four
-    # seconds, consistent with long-exposure noise reduction/dark-frame work.
-    if shutter_seconds > 4.0:
+    # The 2026-10-14 sunset produced every frame below four seconds, then
+    # accepted only alternate triggers once exposures reached exactly four
+    # seconds. Successful frames were 13 seconds apart, consistent with an
+    # exposure-sized dark-frame/write cycle beginning at this boundary.
+    if shutter_seconds >= 4.0:
         return 2 * shutter_seconds + 5.0
     return shutter_seconds + 2.5
 

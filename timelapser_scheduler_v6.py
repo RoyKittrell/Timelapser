@@ -13,7 +13,6 @@ from pathlib import Path
 
 import timelapser_scheduler as scheduler
 import v6_config
-from v6_camera_alive import ensure_camera_alive
 
 
 ROOT = Path(__file__).resolve().parent
@@ -82,13 +81,11 @@ def run_preflight(mod, mission) -> tuple[bool, list[str]]:
 
     checks.append("OK camera Wi-Fi is not required by V6")
 
-    # Only touch the camera once all static prerequisites pass. This physical
-    # proof catches dead dummy-battery supplies, relay faults, SD/write faults,
-    # and failed MEGA4 storage transitions before an empty capture begins.
-    if ok:
-        camera_ok, camera_check = ensure_camera_alive(mission.key)
-        checks.append(camera_check)
-        ok = ok and camera_ok
+    # Do not mount camera storage during preflight. On this E-M5 III, a USB
+    # storage round-trip can leave the wired remote ignored even though the
+    # display has returned to shooting mode. Camera USB is reserved for the
+    # post-capture import stage.
+    checks.append("OK preflight leaves camera USB untouched")
     return ok, checks
 
 
@@ -105,6 +102,7 @@ def build_command(mod, mission, now: datetime) -> list[str]:
         "--event-time", mission.event_dt.isoformat(),
         "--max-frames", str(max_frames),
         "--max-run-minutes", str(max(1.0, remaining / 60)),
+        "--skip-autofocus",
         "--defer-postprocess",
     ]
 

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-schedule.py
+"""schedule.py
 ===========
 
 Human-editable mission plan for Timelapser V5.
@@ -17,6 +16,9 @@ Design goals:
 - per-event overrides
 - easy enable/disable
 """
+
+from datetime import date, timedelta
+from math import acos, asin, atan, cos, degrees, floor, radians, sin, tan
 
 TIMEZONE = "Asia/Kuala_Lumpur"
 
@@ -205,4 +207,100 @@ SCHEDULE = [
         'max_frames': 720,
         'notes': 'Director one-off: Schedule a time lapse to start two minutes from now',
     },
+    {
+        "date": "2026-12-31",
+        "event": "general",
+        "event_time": "22:30",
+        "enabled": True,
+        "start_offset_minutes": 0,
+        "end_offset_minutes": 210,
+        "interval": 5.0,
+        "mode": "general",
+        "transfer_mode": "thumbnail",
+        "max_frames": 2520,
+        "copy_videos_to_mac_after": False,
+        "notes": "New Year's Eve: 22:30 through 02:00 on New Year's Day",
+    },
 ]
+
+
+# Keep the ordinary sunrise/sunset calendar populated without an internet
+# dependency. Explicit rows above always win, so unusual missions and per-day
+# overrides remain human-editable. The calculation is the NOAA sunrise/sunset
+# approximation for Kuala Lumpur and is rounded to the nearest minute.
+AUTO_SCHEDULE_DAYS_AHEAD = 400
+SITE_LATITUDE = 3.1390
+SITE_LONGITUDE = 101.6869
+UTC_OFFSET_HOURS = 8
+SUN_ZENITH_DEGREES = 90.833
+
+
+def _solar_event_time(day, sunrise):
+    day_number = day.timetuple().tm_yday
+    longitude_hour = SITE_LONGITUDE / 15.0
+    approximate_time = day_number + (
+        (6.0 - longitude_hour) / 24.0
+        if sunrise
+        else (18.0 - longitude_hour) / 24.0
+    )
+    mean_anomaly = (0.9856 * approximate_time) - 3.289
+    true_longitude = (
+        mean_anomaly
+        + (1.916 * sin(radians(mean_anomaly)))
+        + (0.020 * sin(radians(2.0 * mean_anomaly)))
+        + 282.634
+    ) % 360.0
+    right_ascension = degrees(atan(0.91764 * tan(radians(true_longitude)))) % 360.0
+    right_ascension += (
+        floor(true_longitude / 90.0) * 90.0
+        - floor(right_ascension / 90.0) * 90.0
+    )
+    right_ascension /= 15.0
+    sin_declination = 0.39782 * sin(radians(true_longitude))
+    cos_declination = cos(asin(sin_declination))
+    cos_hour_angle = (
+        cos(radians(SUN_ZENITH_DEGREES))
+        - (sin_declination * sin(radians(SITE_LATITUDE)))
+    ) / (cos_declination * cos(radians(SITE_LATITUDE)))
+    hour_angle = degrees(acos(cos_hour_angle))
+    if sunrise:
+        hour_angle = 360.0 - hour_angle
+    hour_angle /= 15.0
+    local_hour = (
+        hour_angle
+        + right_ascension
+        - (0.06571 * approximate_time)
+        - 6.622
+        - longitude_hour
+        + UTC_OFFSET_HOURS
+    ) % 24.0
+    minute_of_day = round(local_hour * 60.0) % (24 * 60)
+    return f"{minute_of_day // 60:02d}:{minute_of_day % 60:02d}"
+
+
+def _extend_recurring_solar_schedule():
+    existing = {
+        (entry.get("date"), entry.get("event"))
+        for entry in SCHEDULE
+        if entry.get("event") in {"sunrise", "sunset"}
+    }
+    day = date.today()
+    final_day = day + timedelta(days=AUTO_SCHEDULE_DAYS_AHEAD)
+    while day <= final_day:
+        day_text = day.isoformat()
+        for event in ("sunrise", "sunset"):
+            if (day_text, event) not in existing:
+                SCHEDULE.append(
+                    {
+                        "date": day_text,
+                        "event": event,
+                        "event_time": _solar_event_time(day, event == "sunrise"),
+                        "enabled": True,
+                        "notes": "Auto-generated offline solar schedule",
+                    }
+                )
+        day += timedelta(days=1)
+    SCHEDULE.sort(key=lambda entry: (entry["date"], entry["event_time"], entry["event"]))
+
+
+_extend_recurring_solar_schedule()
