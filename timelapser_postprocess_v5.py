@@ -284,11 +284,21 @@ def _queue_instagram_reel(log_path: Path, run_dir: Path, cwd: Path, python: str,
     return _run_step(log_path, "queue_instagram_reel", cmd, cwd)
 
 
-def _publish_instagram(log_path: Path, run_dir: Path, cwd: Path, python: str) -> dict:
+def _publish_instagram(
+    log_path: Path,
+    run_dir: Path,
+    cwd: Path,
+    python: str,
+    *,
+    reel_only: bool = False,
+) -> dict:
+    command = [python, str(cwd / "instagram_auto_publish.py"), str(run_dir)]
+    if reel_only:
+        command.append("--skip-carousel")
     return _run_step(
         log_path,
-        "publish_instagram_carousel_and_reel",
-        [python, str(cwd / "instagram_auto_publish.py"), str(run_dir)],
+        "publish_instagram_reel_only" if reel_only else "publish_instagram_carousel_and_reel",
+        command,
         cwd,
     )
 
@@ -309,6 +319,7 @@ def run_postprocess(
     render: bool,
     queue_instagram: bool = True,
     publish_instagram: bool = True,
+    instagram_reel_only: bool = False,
     copy_videos_to_mac: bool,
     mac_video_dest: str | None = None,
     initial_completed_steps: tuple[str, ...] = (),
@@ -329,6 +340,7 @@ def run_postprocess(
         "render": bool(render),
         "queue_instagram": bool(queue_instagram),
         "publish_instagram": bool(publish_instagram),
+        "instagram_reel_only": bool(instagram_reel_only),
         "copy_videos_to_mac": bool(copy_videos_to_mac),
         "mac_video_dest": dest,
         "steps": [],
@@ -461,7 +473,13 @@ def run_postprocess(
                 return summary
 
         if publish_instagram and render:
-            step = _publish_instagram(log_path, run_dir, root, python)
+            step = _publish_instagram(
+                log_path,
+                run_dir,
+                root,
+                python,
+                reel_only=instagram_reel_only,
+            )
             summary["steps"].append(step)
             if step["returncode"] != 0:
                 summary["status"] = "failed_publish_instagram"

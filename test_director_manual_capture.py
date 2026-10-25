@@ -7,6 +7,9 @@ from pathlib import Path
 
 SOURCE = Path(__file__).with_name("timelapser_director_v6.py").read_text(encoding="utf-8")
 TREE = ast.parse(SOURCE)
+RUNNER_SOURCE = Path(__file__).with_name("timelapser_v6.py").read_text(encoding="utf-8")
+POSTPROCESS_SOURCE = Path(__file__).with_name("timelapser_postprocess_v6.py").read_text(encoding="utf-8")
+LEGACY_POSTPROCESS_SOURCE = Path(__file__).with_name("timelapser_postprocess_v5.py").read_text(encoding="utf-8")
 FUNCTION_NAMES = {node.name for node in TREE.body if isinstance(node, ast.FunctionDef)}
 PARSE_NODE = next(
     node for node in TREE.body
@@ -51,17 +54,29 @@ class DirectorManualCaptureTests(unittest.TestCase):
     def test_parses_hour_and_second_cadence(self):
         self.assertEqual(
             parse_request("Start a general timelapse for 1hr at 1s cadence"),
-            (60.0, 1.0),
+            (60.0, 1.0, False),
         )
 
     def test_parses_minutes_and_every_seconds(self):
         self.assertEqual(
             parse_request("Run a timelapse for 30 minutes every 2.5 seconds"),
-            (30.0, 2.5),
+            (30.0, 2.5, False),
         )
 
     def test_requires_explicit_duration_and_cadence(self):
         self.assertIsNone(parse_request("Start a timelapse now"))
+
+    def test_explicit_instagram_request_is_reel_only(self):
+        self.assertEqual(
+            parse_request("Start a timelapse for 1hr at 2s and post it on IG when done"),
+            (60.0, 2.0, True),
+        )
+
+    def test_instagram_remains_off_when_explicitly_denied(self):
+        self.assertEqual(
+            parse_request("Start a timelapse for 1hr at 2s; don't post to Instagram"),
+            (60.0, 2.0, False),
+        )
 
     def test_runner_is_general_and_does_not_request_instagram_publish(self):
         starter = next(
@@ -71,7 +86,7 @@ class DirectorManualCaptureTests(unittest.TestCase):
         source = ast.get_source_segment(SOURCE, starter)
         self.assertIn('"--mode", "general"', source)
         self.assertIn('"--defer-postprocess"', source)
-        self.assertNotIn("publish-instagram", source)
+        self.assertIn('"--publish-instagram-reel"', source)
 
     def test_preview_includes_required_settings_and_confirmation(self):
         preview = next(
@@ -93,6 +108,12 @@ class DirectorManualCaptureTests(unittest.TestCase):
         source = ast.get_source_segment(SOURCE, router)
         self.assertIn("PENDING_MANUAL_CAPTURE.exists()", source)
         self.assertIn("confirm_manual_timelapse()", source)
+
+    def test_reel_only_policy_reaches_publisher(self):
+        self.assertIn('"instagram_reel_only": bool(args.publish_instagram_reel)', RUNNER_SOURCE)
+        self.assertIn('deferred.get("instagram_reel_only", False)', POSTPROCESS_SOURCE)
+        self.assertIn('command.append("--skip-carousel")', LEGACY_POSTPROCESS_SOURCE)
+        self.assertNotIn('command.append("--skip-reel")', LEGACY_POSTPROCESS_SOURCE)
 
 
 if __name__ == "__main__":

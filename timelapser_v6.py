@@ -76,6 +76,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--simulate", action="store_true", help="Log timing without touching GPIO")
     parser.add_argument("--skip-autofocus", action="store_true")
     parser.add_argument("--defer-postprocess", action="store_true")
+    parser.add_argument(
+        "--publish-instagram-reel",
+        action="store_true",
+        help="For an explicitly approved general run, publish only the clean Reel after processing",
+    )
     return parser.parse_args()
 
 
@@ -282,7 +287,7 @@ def main() -> int:
         atomic_json(run_dir / "run_manifest.json", manifest)
         atomic_json(config.ACTIVE_RUN, {"run_dir": str(run_dir), **manifest})
         if args.defer_postprocess and status == "capture_complete" and rows:
-            auto_publish = args.mode in {"sunrise", "sunset"}
+            auto_publish = args.mode in {"sunrise", "sunset"} or args.publish_instagram_reel
             atomic_json(
                 run_dir / "postprocess_deferred.json",
                 {
@@ -291,6 +296,7 @@ def main() -> int:
                     "run_dir": str(run_dir),
                     "status": "pending",
                     "publish_instagram": auto_publish,
+                    "instagram_reel_only": bool(args.publish_instagram_reel),
                     "mode": args.mode,
                 },
             )

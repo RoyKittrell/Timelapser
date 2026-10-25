@@ -12,7 +12,12 @@ import timelapser_postprocess_v5 as legacy
 import v6_config
 
 
-def run_postprocess(run_dir: Path, *, publish_instagram: bool = True) -> dict:
+def run_postprocess(
+    run_dir: Path,
+    *,
+    publish_instagram: bool = True,
+    instagram_reel_only: bool = False,
+) -> dict:
     run_dir = run_dir.expanduser().resolve()
     root = Path(__file__).resolve().parent
     log_path = run_dir / "postprocess_workflow.log"
@@ -24,6 +29,7 @@ def run_postprocess(run_dir: Path, *, publish_instagram: bool = True) -> dict:
         completed_steps=[],
         started_at=datetime.now().astimezone().isoformat(timespec="seconds"),
         publish_instagram=bool(publish_instagram),
+        instagram_reel_only=bool(instagram_reel_only),
         elapsed_seconds=0,
         ended_at="",
         error="",
@@ -56,6 +62,7 @@ def run_postprocess(run_dir: Path, *, publish_instagram: bool = True) -> dict:
         # automatic publisher could upload later.
         queue_instagram=publish_instagram,
         publish_instagram=publish_instagram,
+        instagram_reel_only=instagram_reel_only,
         copy_videos_to_mac=v6_config.COPY_VIDEOS_TO_MAC,
         initial_completed_steps=(import_step["name"], learning_step["name"]),
     )
@@ -89,8 +96,20 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run the complete Timelapser V6 post-capture workflow")
     parser.add_argument("run_dir", type=Path)
     parser.add_argument("--skip-instagram-publish", action="store_true")
+    parser.add_argument("--instagram-reel-only", action="store_true")
     args = parser.parse_args()
-    result = run_postprocess(args.run_dir, publish_instagram=not args.skip_instagram_publish)
+    deferred = {}
+    deferred_path = args.run_dir.expanduser().resolve() / "postprocess_deferred.json"
+    try:
+        deferred = json.loads(deferred_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        pass
+    reel_only = bool(args.instagram_reel_only or deferred.get("instagram_reel_only", False))
+    result = run_postprocess(
+        args.run_dir,
+        publish_instagram=not args.skip_instagram_publish,
+        instagram_reel_only=reel_only,
+    )
     print(json.dumps(result, indent=2, default=str))
     return 0 if result.get("status") == "complete" else 1
 

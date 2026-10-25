@@ -874,8 +874,8 @@ def set_scheduler_paused(paused: bool, reason: str) -> str:
     return "Scheduled V6 captures are enabled again."
 
 
-def parse_manual_capture_request(text: str) -> tuple[float, float] | None:
-    """Return (duration_minutes, interval_seconds) for an explicit start request."""
+def parse_manual_capture_request(text: str) -> tuple[float, float, bool] | None:
+    """Return duration, cadence, and explicit Reel publishing intent."""
     normalized = text.lower().strip()
     if not re.search(r"\b(start|run|begin|launch)\b", normalized) or not re.search(
         r"\b(time[ -]?lapse|timelapse)\b", normalized
@@ -903,7 +903,14 @@ def parse_manual_capture_request(text: str) -> tuple[float, float] | None:
     duration_unit = duration_match.group(2)
     duration_minutes = duration * 60 if duration_unit.startswith("h") else duration
     interval_seconds = float(interval_match.group(1))
-    return duration_minutes, interval_seconds
+    instagram_mentioned = bool(re.search(r"\b(ig|instagram)\b", normalized))
+    publish_verb = bool(re.search(r"\b(post|publish|upload|share)\b", normalized))
+    publish_denied = bool(re.search(
+        r"\b(?:do not|don't|dont|no|without)\b.{0,24}\b(?:ig|instagram|publish|post|upload)\b",
+        normalized,
+    ))
+    publish_reel = instagram_mentioned and publish_verb and not publish_denied
+    return duration_minutes, interval_seconds, publish_reel
 
 
 def manual_timelapse_refusal(duration_minutes: float, interval_seconds: float) -> str | None:
@@ -949,7 +956,11 @@ def human_duration(seconds: float) -> str:
     return " ".join(parts)
 
 
-def prepare_manual_timelapse(duration_minutes: float, interval_seconds: float) -> str:
+def prepare_manual_timelapse(
+    duration_minutes: float,
+    interval_seconds: float,
+    publish_reel: bool = False,
+) -> str:
     refusal = manual_timelapse_refusal(duration_minutes, interval_seconds)
     if refusal:
         return refusal
@@ -966,6 +977,7 @@ def prepare_manual_timelapse(duration_minutes: float, interval_seconds: float) -
         "max_frames": max_frames,
         "output_fps": MANUAL_OUTPUT_FPS,
         "video_seconds": video_seconds,
+        "publish_reel": bool(publish_reel),
     }
     v6_config.CONTROL_DIR.mkdir(parents=True, exist_ok=True)
     temporary = PENDING_MANUAL_CAPTURE.with_suffix(".tmp")
@@ -981,7 +993,7 @@ def prepare_manual_timelapse(duration_minutes: float, interval_seconds: float) -
         f"- Resulting video: approximately {human_duration(video_seconds)} at {MANUAL_OUTPUT_FPS:g} fps\n"
         f"- Camera: wake and autofocus once at startup\n"
         f"- Storage: {v6_config.DEFAULT_OUTPUT_ROOT}\n"
-        "- Instagram: disabled\n\n"
+        f"- Instagram: {'Reel only' if publish_reel else 'disabled'}\n\n"
         f"Reply **Confirm start** within {MANUAL_CONFIRMATION_MINUTES} minutes to begin, or **Cancel**."
     )
 
@@ -994,6 +1006,7 @@ def confirm_manual_timelapse() -> str:
         expires_at = datetime.fromisoformat(str(pending["expires_at"]))
         duration_minutes = float(pending["duration_minutes"])
         interval_seconds = float(pending["interval_seconds"])
+        publish_reel = bool(pending.get("publish_reel", False))
     except (KeyError, TypeError, ValueError):
         PENDING_MANUAL_CAPTURE.unlink(missing_ok=True)
         return "The pending manual timelapse request was invalid and has been discarded."
@@ -1002,7 +1015,7 @@ def confirm_manual_timelapse() -> str:
         return "The pending manual timelapse confirmation expired. Please request it again."
 
     PENDING_MANUAL_CAPTURE.unlink(missing_ok=True)
-    return start_manual_timelapse(duration_minutes, interval_seconds)
+    return start_manual_timelapse(duration_minutes, interval_seconds, publish_reel=publish_reel)
 
 
 def cancel_manual_timelapse() -> str:
@@ -1012,7 +1025,12 @@ def cancel_manual_timelapse() -> str:
     return "The pending manual timelapse was cancelled. Nothing was started."
 
 
-def start_manual_timelapse(duration_minutes: float, interval_seconds: float) -> str:
+def start_manual_timelapse(
+    duration_minutes: float,
+    interval_seconds: float,
+    *,
+    publish_reel: bool = False,
+) -> str:
     refusal = manual_timelapse_refusal(duration_minutes, interval_seconds)
     if refusal:
         return refusal
@@ -1028,6 +1046,8 @@ def start_manual_timelapse(duration_minutes: float, interval_seconds: float) -> 
         "--max-run-minutes", str(duration_minutes),
         "--defer-postprocess",
     ]
+    if publish_reel:
+        command.append("--publish-instagram-reel")
     v6_config.CONTROL_DIR.mkdir(parents=True, exist_ok=True)
     with MANUAL_CAPTURE_LOG.open("a", encoding="utf-8") as log:
         log.write(
@@ -1052,7 +1072,8 @@ def start_manual_timelapse(duration_minutes: float, interval_seconds: float) -> 
     return (
         f"Started a general {duration_minutes:g}-minute timelapse at {interval_seconds:g}-second "
         f"cadence (up to {max_frames:,} frames, PID {process.pid}). "
-        "Post-processing is deferred and Instagram publishing is disabled for this general run."
+        "Post-processing is deferred and "
+        + ("only the Reel will publish to Instagram." if publish_reel else "Instagram publishing is disabled.")
     )
 
 
