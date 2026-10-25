@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -48,6 +49,8 @@ ACTIVE_CAMERA_JOB_PATTERNS = (
     "render_timelapse.py",
     "instagram_auto_publish.py",
 )
+MANUAL_CAPTURE_LOG = v6_config.CONTROL_DIR / "manual_capture.log"
+MAX_MANUAL_CAPTURE_MINUTES = 12 * 60
 
 load_dotenv(ENV_FILE)
 
@@ -868,6 +871,103 @@ def set_scheduler_paused(paused: bool, reason: str) -> str:
     return "Scheduled V6 captures are enabled again."
 
 
+def parse_manual_capture_request(text: str) -> tuple[float, float] | None:
+    """Return (duration_minutes, interval_seconds) for an explicit start request."""
+    normalized = text.lower().strip()
+    if not re.search(r"\b(start|run|begin|launch)\b", normalized) or not re.search(
+        r"\b(time[ -]?lapse|timelapse)\b", normalized
+    ):
+        return None
+
+    duration_match = re.search(
+        r"\b(?:for\s+)?(\d+(?:\.\d+)?)\s*(hours?|hrs?|hr|h|minutes?|mins?|min|m)\b",
+        normalized,
+    )
+    interval_match = re.search(
+        r"\b(?:at|every|cadence(?:\s+of)?|interval(?:\s+of)?)\s*"
+        r"(\d+(?:\.\d+)?)\s*(seconds?|secs?|sec|s)\b",
+        normalized,
+    )
+    if interval_match is None:
+        interval_match = re.search(
+            r"\b(\d+(?:\.\d+)?)\s*(seconds?|secs?|sec|s)\s*(?:cadence|interval)\b",
+            normalized,
+        )
+    if duration_match is None or interval_match is None:
+        return None
+
+    duration = float(duration_match.group(1))
+    duration_unit = duration_match.group(2)
+    duration_minutes = duration * 60 if duration_unit.startswith("h") else duration
+    interval_seconds = float(interval_match.group(1))
+    return duration_minutes, interval_seconds
+
+
+def start_manual_timelapse(duration_minutes: float, interval_seconds: float) -> str:
+    if duration_minutes <= 0 or duration_minutes > MAX_MANUAL_CAPTURE_MINUTES:
+        return "Manual capture duration must be greater than zero and no longer than 12 hours."
+    if interval_seconds < v6_config.MIN_INTERVAL_SECONDS:
+        return f"Manual capture cadence must be at least {v6_config.MIN_INTERVAL_SECONDS:g} seconds."
+    if interval_seconds <= v6_config.SHUTTER_PULSE_SECONDS:
+        return "Manual capture cadence must be longer than the shutter relay pulse."
+
+    active = active_camera_jobs()
+    if active:
+        return "Manual timelapse refused because capture or post-processing is already active."
+    if camera_is_usb_storage():
+        return "Manual timelapse refused because the Olympus is in USB storage mode."
+
+    output_root = v6_config.DEFAULT_OUTPUT_ROOT
+    if not output_root.parent.is_mount():
+        return f"Manual timelapse refused because the output drive is not mounted: {output_root.parent}"
+
+    now = datetime.now().astimezone()
+    capture_end = now + timedelta(minutes=duration_minutes)
+    next_mission = next_scheduled_mission()
+    if next_mission and capture_end >= next_mission.preflight_dt:
+        return (
+            "Manual timelapse refused because it would overlap the next scheduled preflight at "
+            f"{next_mission.preflight_dt.strftime('%H:%M')}."
+        )
+
+    max_frames = max(1, math.floor(duration_minutes * 60 / interval_seconds))
+    command = [
+        sys.executable,
+        str(v6_config.PROJECT_ROOT / "timelapser_v6.py"),
+        "--mode", "general",
+        "--interval", str(interval_seconds),
+        "--max-frames", str(max_frames),
+        "--max-run-minutes", str(duration_minutes),
+        "--defer-postprocess",
+    ]
+    v6_config.CONTROL_DIR.mkdir(parents=True, exist_ok=True)
+    with MANUAL_CAPTURE_LOG.open("a", encoding="utf-8") as log:
+        log.write(
+            f"\n{now.isoformat(timespec='seconds')} DIRECTOR MANUAL START: "
+            f"duration={duration_minutes:g}m interval={interval_seconds:g}s frames={max_frames}\n"
+        )
+        log.flush()
+        process = subprocess.Popen(
+            command,
+            cwd=str(v6_config.PROJECT_ROOT),
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+
+    time.sleep(0.75)
+    if process.poll() is not None:
+        return (
+            "The manual timelapse process exited during startup. "
+            f"Check {MANUAL_CAPTURE_LOG} for details."
+        )
+    return (
+        f"Started a general {duration_minutes:g}-minute timelapse at {interval_seconds:g}-second "
+        f"cadence (up to {max_frames:,} frames, PID {process.pid}). "
+        "Post-processing is deferred and Instagram publishing is disabled for this general run."
+    )
+
+
 def request_power_action(action: str, *, force: bool) -> str:
     helper_action = {
         ("reboot", False): "request",
@@ -943,6 +1043,9 @@ def run_director_preflight() -> str:
 
 def handle_director_command(text: str) -> str | None:
     normalized = text.lower().strip()
+    manual_capture = parse_manual_capture_request(text)
+    if manual_capture is not None:
+        return start_manual_timelapse(*manual_capture)
     if re.search(r"\bpre[ -]?flight\b", normalized) and re.search(
         r"\b(check|test|run|now)\b", normalized
     ):
