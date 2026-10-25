@@ -28,6 +28,9 @@ parse_request = NAMESPACE["parse_manual_capture_request"]
 class DirectorManualCaptureTests(unittest.TestCase):
     def test_manual_capture_helpers_exist(self):
         self.assertIn("parse_manual_capture_request", FUNCTION_NAMES)
+        self.assertIn("prepare_manual_timelapse", FUNCTION_NAMES)
+        self.assertIn("confirm_manual_timelapse", FUNCTION_NAMES)
+        self.assertIn("cancel_manual_timelapse", FUNCTION_NAMES)
         self.assertIn("start_manual_timelapse", FUNCTION_NAMES)
 
     def test_chat_router_calls_manual_start_before_ai_fallback(self):
@@ -41,7 +44,9 @@ class DirectorManualCaptureTests(unittest.TestCase):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
         ]
         self.assertIn("parse_manual_capture_request", calls)
-        self.assertIn("start_manual_timelapse", calls)
+        self.assertIn("prepare_manual_timelapse", calls)
+        self.assertIn("confirm_manual_timelapse", calls)
+        self.assertIn("cancel_manual_timelapse", calls)
 
     def test_parses_hour_and_second_cadence(self):
         self.assertEqual(
@@ -67,6 +72,27 @@ class DirectorManualCaptureTests(unittest.TestCase):
         self.assertIn('"--mode", "general"', source)
         self.assertIn('"--defer-postprocess"', source)
         self.assertNotIn("publish-instagram", source)
+
+    def test_preview_includes_required_settings_and_confirmation(self):
+        preview = next(
+            node for node in TREE.body
+            if isinstance(node, ast.FunctionDef) and node.name == "prepare_manual_timelapse"
+        )
+        source = ast.get_source_segment(SOURCE, preview)
+        for required in (
+            "Capture time", "Cadence", "Expected triggers", "Resulting video",
+            "output_fps", "autofocus once", "Storage", "Instagram", "Confirm start",
+        ):
+            self.assertIn(required, source)
+
+    def test_start_requires_pending_confirmation_route(self):
+        router = next(
+            node for node in TREE.body
+            if isinstance(node, ast.FunctionDef) and node.name == "handle_director_command"
+        )
+        source = ast.get_source_segment(SOURCE, router)
+        self.assertIn("PENDING_MANUAL_CAPTURE.exists()", source)
+        self.assertIn("confirm_manual_timelapse()", source)
 
 
 if __name__ == "__main__":

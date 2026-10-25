@@ -50,7 +50,10 @@ ACTIVE_CAMERA_JOB_PATTERNS = (
     "instagram_auto_publish.py",
 )
 MANUAL_CAPTURE_LOG = v6_config.CONTROL_DIR / "manual_capture.log"
+PENDING_MANUAL_CAPTURE = v6_config.CONTROL_DIR / "pending_manual_capture.json"
 MAX_MANUAL_CAPTURE_MINUTES = 12 * 60
+MANUAL_OUTPUT_FPS = 30.0
+MANUAL_CONFIRMATION_MINUTES = 10
 
 load_dotenv(ENV_FILE)
 
@@ -903,7 +906,7 @@ def parse_manual_capture_request(text: str) -> tuple[float, float] | None:
     return duration_minutes, interval_seconds
 
 
-def start_manual_timelapse(duration_minutes: float, interval_seconds: float) -> str:
+def manual_timelapse_refusal(duration_minutes: float, interval_seconds: float) -> str | None:
     if duration_minutes <= 0 or duration_minutes > MAX_MANUAL_CAPTURE_MINUTES:
         return "Manual capture duration must be greater than zero and no longer than 12 hours."
     if interval_seconds < v6_config.MIN_INTERVAL_SECONDS:
@@ -929,8 +932,93 @@ def start_manual_timelapse(duration_minutes: float, interval_seconds: float) -> 
             "Manual timelapse refused because it would overlap the next scheduled preflight at "
             f"{next_mission.preflight_dt.strftime('%H:%M')}."
         )
+    return None
+
+
+def human_duration(seconds: float) -> str:
+    rounded = max(0, round(seconds))
+    hours, remainder = divmod(rounded, 3600)
+    minutes, secs = divmod(remainder, 60)
+    parts = []
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes:
+        parts.append(f"{minutes}m")
+    if secs or not parts:
+        parts.append(f"{secs}s")
+    return " ".join(parts)
+
+
+def prepare_manual_timelapse(duration_minutes: float, interval_seconds: float) -> str:
+    refusal = manual_timelapse_refusal(duration_minutes, interval_seconds)
+    if refusal:
+        return refusal
+
+    now = datetime.now().astimezone()
+    max_frames = max(1, math.floor(duration_minutes * 60 / interval_seconds))
+    video_seconds = max_frames / MANUAL_OUTPUT_FPS
+    payload = {
+        "status": "awaiting_confirmation",
+        "created_at": now.isoformat(timespec="seconds"),
+        "expires_at": (now + timedelta(minutes=MANUAL_CONFIRMATION_MINUTES)).isoformat(timespec="seconds"),
+        "duration_minutes": duration_minutes,
+        "interval_seconds": interval_seconds,
+        "max_frames": max_frames,
+        "output_fps": MANUAL_OUTPUT_FPS,
+        "video_seconds": video_seconds,
+    }
+    v6_config.CONTROL_DIR.mkdir(parents=True, exist_ok=True)
+    temporary = PENDING_MANUAL_CAPTURE.with_suffix(".tmp")
+    temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(PENDING_MANUAL_CAPTURE)
+
+    return (
+        "Manual timelapse ready for confirmation:\n\n"
+        f"- Type: General\n"
+        f"- Capture time: {human_duration(duration_minutes * 60)}\n"
+        f"- Cadence: every {interval_seconds:g}s\n"
+        f"- Expected triggers: up to {max_frames:,}\n"
+        f"- Resulting video: approximately {human_duration(video_seconds)} at {MANUAL_OUTPUT_FPS:g} fps\n"
+        f"- Camera: wake and autofocus once at startup\n"
+        f"- Storage: {v6_config.DEFAULT_OUTPUT_ROOT}\n"
+        "- Instagram: disabled\n\n"
+        f"Reply **Confirm start** within {MANUAL_CONFIRMATION_MINUTES} minutes to begin, or **Cancel**."
+    )
+
+
+def confirm_manual_timelapse() -> str:
+    pending = read_json(PENDING_MANUAL_CAPTURE)
+    if pending.get("status") != "awaiting_confirmation":
+        return "There is no manual timelapse awaiting confirmation."
+    try:
+        expires_at = datetime.fromisoformat(str(pending["expires_at"]))
+        duration_minutes = float(pending["duration_minutes"])
+        interval_seconds = float(pending["interval_seconds"])
+    except (KeyError, TypeError, ValueError):
+        PENDING_MANUAL_CAPTURE.unlink(missing_ok=True)
+        return "The pending manual timelapse request was invalid and has been discarded."
+    if datetime.now().astimezone() > expires_at:
+        PENDING_MANUAL_CAPTURE.unlink(missing_ok=True)
+        return "The pending manual timelapse confirmation expired. Please request it again."
+
+    PENDING_MANUAL_CAPTURE.unlink(missing_ok=True)
+    return start_manual_timelapse(duration_minutes, interval_seconds)
+
+
+def cancel_manual_timelapse() -> str:
+    if not PENDING_MANUAL_CAPTURE.exists():
+        return "There is no manual timelapse awaiting confirmation."
+    PENDING_MANUAL_CAPTURE.unlink(missing_ok=True)
+    return "The pending manual timelapse was cancelled. Nothing was started."
+
+
+def start_manual_timelapse(duration_minutes: float, interval_seconds: float) -> str:
+    refusal = manual_timelapse_refusal(duration_minutes, interval_seconds)
+    if refusal:
+        return refusal
 
     max_frames = max(1, math.floor(duration_minutes * 60 / interval_seconds))
+    now = datetime.now().astimezone()
     command = [
         sys.executable,
         str(v6_config.PROJECT_ROOT / "timelapser_v6.py"),
@@ -1043,9 +1131,16 @@ def run_director_preflight() -> str:
 
 def handle_director_command(text: str) -> str | None:
     normalized = text.lower().strip()
+    if re.search(r"\b(cancel|discard|never mind|nevermind)\b", normalized) and PENDING_MANUAL_CAPTURE.exists():
+        return cancel_manual_timelapse()
+    if PENDING_MANUAL_CAPTURE.exists() and (
+        normalized in {"confirm", "confirm start", "yes", "yes start", "start it", "proceed"}
+        or re.search(r"\b(go ahead|confirm(?: and)? start|yes,? start it)\b", normalized)
+    ):
+        return confirm_manual_timelapse()
     manual_capture = parse_manual_capture_request(text)
     if manual_capture is not None:
-        return start_manual_timelapse(*manual_capture)
+        return prepare_manual_timelapse(*manual_capture)
     if re.search(r"\bpre[ -]?flight\b", normalized) and re.search(
         r"\b(check|test|run|now)\b", normalized
     ):
