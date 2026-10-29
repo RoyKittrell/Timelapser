@@ -18,6 +18,7 @@ from PIL import Image, ImageOps
 
 JPEG_EXTENSIONS = {".jpg", ".jpeg"}
 MIN_JPEG_BYTES = 50_000
+CAPTURE_START_TOLERANCE = timedelta(minutes=2)
 CAPTURE_END_TOLERANCE = timedelta(minutes=2)
 
 
@@ -121,7 +122,10 @@ def manifest_capture_window(manifest: dict) -> tuple[datetime, datetime]:
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError("Run manifest lacks a valid capture start/end time") from exc
     # Olympus EXIF timestamps are local wall-clock values without a UTC offset.
-    return started.replace(tzinfo=None), ended.replace(tzinfo=None) + CAPTURE_END_TOLERANCE
+    return (
+        started.replace(tzinfo=None) - CAPTURE_START_TOLERANCE,
+        ended.replace(tzinfo=None) + CAPTURE_END_TOLERANCE,
+    )
 
 
 def import_run(run_dir: Path, sd_root: Path, *, dry_run: bool = False) -> dict:

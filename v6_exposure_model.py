@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Expected Aperture Priority exposure and safe wired-trigger cadence.
 
-The curves are derived from full-resolution JPEG EXIF from the successful
-2026-10-01 sunrise and 2026-09-30 sunset runs. Times are minutes relative to
-the scheduled solar event. Interpolation happens in exposure-value space so
-shutter progression remains smooth between observed points.
+Legacy curves provide a fallback until a settings-epoch calibration exists.
+Current curves are learned from full-resolution JPEG EXIF, relative to the
+scheduled solar event, with interpolation in exposure-value space.
 """
 
 from __future__ import annotations
@@ -86,10 +85,23 @@ def learned_curve(mode: str) -> tuple[tuple[float, float], ...] | None:
     return points if len(points) >= 2 and all(shutter > 0 for _, shutter in points) else None
 
 
+def learned_curve_replaces_baseline() -> bool:
+    try:
+        payload = json.loads(calibration_path().read_text(encoding="utf-8"))
+        return int(payload.get("version", 0)) >= 2 and bool(payload.get("settings_epoch"))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return False
+
+
 def model_source(mode: str) -> str | None:
     learned = learned_curve(mode)
     if learned:
-        return f"baseline plus learned calibration: {calibration_path()}"
+        relationship = (
+            "new-settings learned calibration"
+            if learned_curve_replaces_baseline()
+            else "baseline plus learned calibration"
+        )
+        return f"{relationship}: {calibration_path()}"
     return MODEL_SOURCE.get(mode)
 
 
@@ -101,14 +113,17 @@ def expected_shutter_seconds(mode: str, event_offset_minutes: float) -> float | 
     learned = learned_curve(mode)
     if not learned:
         return baseline
+    if learned_curve_replaces_baseline():
+        return _interpolate(learned, event_offset_minutes)
     return max(baseline, _interpolate(learned, event_offset_minutes))
 
 
 def expected_busy_seconds(shutter_seconds: float) -> float:
-    # The source runs show an exposure-sized extra delay above about four
-    # seconds, consistent with long-exposure noise reduction/dark-frame work.
-    if shutter_seconds > 4.0:
-        return 2 * shutter_seconds + 5.0
+    # At four seconds and above, allow for an exposure-sized dark-frame/noise-
+    # reduction cycle. The former extra five-second penalty was learned from
+    # one old-settings failure and was unnecessarily throttling current runs.
+    if shutter_seconds >= 4.0:
+        return 2 * shutter_seconds
     return shutter_seconds + 2.5
 
 
@@ -117,9 +132,11 @@ def cadence_prediction(mode: str, event_offset_minutes: float, base_interval: fl
     if shutter is None:
         return None
     busy = expected_busy_seconds(shutter)
-    # Preserve at least 0.5 seconds of headroom, rounded upward to an easily
-    # inspectable half-second cadence.
-    safe_interval = math.ceil((busy + 0.5) * 2) / 2
+    # Short exposures retain explicit write/relay headroom. Long exposures
+    # already reserve a full second exposure for dark-frame processing, so do
+    # not add another delay beyond that conservative allowance.
+    headroom = 0.0 if shutter >= 4.0 else 0.5
+    safe_interval = math.ceil((busy + headroom) * 2) / 2
     return CadencePrediction(
         mode=mode,
         event_offset_minutes=event_offset_minutes,

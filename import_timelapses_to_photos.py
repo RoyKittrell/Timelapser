@@ -10,6 +10,7 @@ import os
 import shlex
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -24,6 +25,12 @@ SSH_OPTIONS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=12",
                "-o", "HostKeyAlias=timelapser128gb.local",
                "-i", str(Path.home() / ".ssh/timelapser")]
 FIELDS = ("source", "filename", "sha256", "status", "photos_id", "updated_at")
+PHOTOS_LOOKUP_TIMEOUT = 15
+PHOTOS_IMPORT_TIMEOUT = 180
+
+
+class PhotosUnavailable(RuntimeError):
+    """Photos could not complete an import in the current Mac session."""
 
 
 def run(command, **kwargs):
@@ -59,7 +66,7 @@ root = Path('/media/roy/My Passport/Timelapser')
 for request in root.glob('*/photos_import_request.json'):
     try:
         payload = json.loads(request.read_text())
-        if payload.get('status') != 'requested':
+        if payload.get('status') not in {'requested', 'waiting_for_unlock'}:
             continue
         video = request.parent / payload['video_name']
         if video.is_file() and video.stat().st_size > 0:
@@ -130,19 +137,37 @@ def photos_id(filename):
     end tell
     return ""
 end run'''
-    return run(["osascript", "-e", script, filename], capture_output=True).stdout.strip()
+    try:
+        return run(["osascript", "-e", script, filename], capture_output=True,
+                   timeout=PHOTOS_LOOKUP_TIMEOUT).stdout.strip()
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        # A large or sleeping Photos library can make this best-effort lookup
+        # slow or unavailable. The import command below still checks duplicates.
+        return ""
 
 
 def import_photo(path):
     script = '''on run argv
     set sourceFile to POSIX file (item 1 of argv) as alias
     tell application "Photos"
-        set importedItems to import {sourceFile} with skip check duplicates
-        if (count of importedItems) is not 1 then error "Photos did not return one imported item"
+        set importedItems to import {sourceFile}
+        if (count of importedItems) is 0 then return "duplicate"
+        if (count of importedItems) is not 1 then error "Photos returned an unexpected number of imported items"
         return id of item 1 of importedItems
     end tell
 end run'''
-    return run(["osascript", "-e", script, str(path)], capture_output=True).stdout.strip()
+    run(["open", "-gja", "Photos"], capture_output=True, timeout=15)
+    time.sleep(2)
+    try:
+        return run(["osascript", "-e", script, str(path)], capture_output=True,
+                   timeout=PHOTOS_IMPORT_TIMEOUT).stdout.strip()
+    except subprocess.TimeoutExpired as error:
+        raise PhotosUnavailable("Apple Photos did not respond; the Mac may be locked") from error
+    except subprocess.CalledProcessError as error:
+        detail = (error.stderr or "").strip()
+        if "-1712" in detail or "timed out" in detail.lower():
+            raise PhotosUnavailable("Apple Photos did not respond; the Mac may be locked") from error
+        raise RuntimeError(detail or "Apple Photos rejected the import") from error
 
 
 def pull(item):
@@ -217,6 +242,18 @@ def main():
                 print(f"{'Already in Photos' if found else 'Imported'}: {name}")
                 if request_path:
                     update_remote_request(request_path, "imported", "Imported into Apple Photos")
+            except PhotosUnavailable as error:
+                print(f"WAITING {name}: {error}", file=sys.stderr)
+                if request_path:
+                    try:
+                        update_remote_request(
+                            request_path,
+                            "waiting_for_unlock",
+                            "Downloaded to Mac; waiting for Apple Photos (unlock the Mac if needed)",
+                        )
+                    except Exception:
+                        pass
+                continue
             except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired, RuntimeError) as error:
                 print(f"FAILED {name}: {error}", file=sys.stderr)
                 if request_path:

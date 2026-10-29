@@ -6,14 +6,17 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import signal
 import shutil
 import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
 
 import timelapser_scheduler as scheduler
 import v6_config
 from v6_camera_alive import ensure_camera_alive
+import mega4_usb_import
 
 
 ROOT = Path(__file__).resolve().parent
@@ -82,13 +85,13 @@ def run_preflight(mod, mission) -> tuple[bool, list[str]]:
 
     checks.append("OK camera Wi-Fi is not required by V6")
 
-    # Only touch the camera once all static prerequisites pass. This physical
-    # proof catches dead dummy-battery supplies, relay faults, SD/write faults,
-    # and failed MEGA4 storage transitions before an empty capture begins.
     if ok:
-        camera_ok, camera_check = ensure_camera_alive(mission.key)
-        checks.append(camera_check)
-        ok = ok and camera_ok
+        camera_ok, camera_message = ensure_camera_alive(mission.key)
+        checks.append(camera_message)
+        if not camera_ok:
+            ok = False
+    else:
+        checks.append("SKIP camera test shot because an earlier preflight check failed")
     return ok, checks
 
 
@@ -105,8 +108,110 @@ def build_command(mod, mission, now: datetime) -> list[str]:
         "--event-time", mission.event_dt.isoformat(),
         "--max-frames", str(max_frames),
         "--max-run-minutes", str(max(1.0, remaining / 60)),
+        "--skip-autofocus",
         "--defer-postprocess",
     ]
+
+
+def read_json(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return {}
+
+
+def write_json(path: Path, payload: dict) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2, default=str) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def capture_due_for_preemption(mod) -> scheduler.Mission | None:
+    if v6_config.SCHEDULER_PAUSE_FILE.exists():
+        return None
+    now = datetime.now().astimezone()
+    state = scheduler.load_state()
+    for mission in scheduler.build_missions(mod):
+        if not mission.enabled or not (mission.preflight_dt <= now < mission.end_dt):
+            continue
+        status = state.get("events", {}).get(mission.key, {}).get("status", "pending")
+        if status not in {"complete", "failed_terminal", "missed"}:
+            return mission
+    return None
+
+
+def cleanup_interrupted_stage(run_dir: Path, stage: str) -> list[str]:
+    removed: list[str] = []
+
+    def remove_path(path: Path) -> None:
+        if path.is_dir():
+            shutil.rmtree(path, ignore_errors=True)
+        elif path.exists():
+            path.unlink(missing_ok=True)
+        removed.append(str(path))
+
+    if stage == "import_wired_v6_jpegs_via_mega4_usb":
+        device = mega4_usb_import.camera_partition()
+        mega4_usb_import.cleanup(device)
+    elif stage == "smooth_exposure_v2":
+        remove_path(run_dir / "frames_smoothed_luma_v2")
+    elif stage == "render_videos":
+        for path in (
+            list(run_dir.glob(f"{run_dir.name}_final_*.mp4"))
+            + list(run_dir.glob("_overlay_stage_*"))
+            + [run_dir / "_render_stage", run_dir / "render_summary_v3_final.json"]
+        ):
+            remove_path(path)
+    elif stage == "create_instagram_carousel_formats":
+        for path in list(run_dir.glob(f"{run_dir.name}_final_instagram-carousel_*.mp4")) + [
+            run_dir / "instagram_formats_summary.json"
+        ]:
+            remove_path(path)
+    return removed
+
+
+def pause_postprocess_for_capture(
+    proc: subprocess.Popen,
+    run_dir: Path,
+    request_path: Path,
+    request: dict,
+    mission: scheduler.Mission,
+) -> None:
+    live_path = run_dir / "postprocess_live_status.json"
+    live = read_json(live_path)
+    interrupted_step = str(live.get("current_step") or "preparing")
+    scheduler.log(
+        f"V6 DEFERRED PROCESS PAUSE {run_dir.name}: {interrupted_step} interrupted for {mission.key}"
+    )
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+        proc.wait(timeout=20)
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait(timeout=5)
+    except ProcessLookupError:
+        pass
+
+    removed = cleanup_interrupted_stage(run_dir, interrupted_step)
+    paused_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    request.update(
+        status="pending",
+        paused_at=paused_at,
+        paused_for_mission=mission.key,
+        interrupted_step=interrupted_step,
+        interrupted_outputs_removed=removed,
+        preemption_count=int(request.get("preemption_count", 0)) + 1,
+    )
+    scheduler.save_deferred_request(request_path, request)
+    live.update(
+        status="paused_for_capture",
+        current_step="",
+        paused_step=interrupted_step,
+        paused_at=paused_at,
+        paused_for_mission=mission.key,
+        error="",
+    )
+    write_json(live_path, live)
 
 
 def run_one_deferred_postprocess(mod) -> bool:
@@ -125,7 +230,13 @@ def run_one_deferred_postprocess(mod) -> bool:
     )
     scheduler.save_deferred_request(request_path, request)
     scheduler.log(f"V6 DEFERRED PROCESS START {run_dir.name}")
-    proc = subprocess.run(command, cwd=str(ROOT))
+    proc = subprocess.Popen(command, cwd=str(ROOT), start_new_session=True)
+    while proc.poll() is None:
+        mission = capture_due_for_preemption(mod)
+        if mission is not None:
+            pause_postprocess_for_capture(proc, run_dir, request_path, request, mission)
+            return True
+        time.sleep(5)
     request.update(
         status="complete" if proc.returncode == 0 else "failed",
         returncode=proc.returncode,

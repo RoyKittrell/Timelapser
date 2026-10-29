@@ -11,6 +11,7 @@ from pathlib import Path
 
 import mega4_usb_import
 import v6_config
+from PIL import Image
 from v6_intervalometer import WiredCamera
 
 
@@ -41,6 +42,54 @@ def _save_state(path: Path, payload: dict) -> None:
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     temporary.replace(path)
+
+
+def purge_stale_test_shot(now: datetime | None = None) -> bool:
+    """Delete dashboard test-shot files once their 24-hour lifetime expires."""
+    state = _load_state(v6_config.TEST_SHOT_STATE)
+    timestamp = state.get("completed_at") or state.get("requested_at")
+    checked_at = None
+    if timestamp:
+        try:
+            checked_at = datetime.fromisoformat(str(timestamp))
+        except (TypeError, ValueError):
+            checked_at = None
+    if checked_at is None and v6_config.TEST_SHOT_IMAGE.exists():
+        checked_at = datetime.fromtimestamp(
+            v6_config.TEST_SHOT_IMAGE.stat().st_mtime,
+            tz=datetime.now().astimezone().tzinfo,
+        )
+    if checked_at is None:
+        return False
+    current = now or datetime.now().astimezone()
+    if (current - checked_at).total_seconds() <= v6_config.TEST_SHOT_MAX_AGE_SECONDS:
+        return False
+    v6_config.TEST_SHOT_IMAGE.unlink(missing_ok=True)
+    v6_config.TEST_SHOT_STATE.unlink(missing_ok=True)
+    return True
+
+
+def _save_test_shot_preview(source: Path, mission_key: str, completed_at: str) -> None:
+    """Publish an upright dashboard preview without retaining camera media."""
+    v6_config.TEST_SHOT_DIR.mkdir(parents=True, exist_ok=True)
+    temporary = v6_config.TEST_SHOT_IMAGE.with_suffix(".tmp.jpg")
+    with Image.open(source) as image:
+        image.rotate(90, expand=True).convert("RGB").save(
+            temporary,
+            format="JPEG",
+            quality=92,
+            optimize=True,
+        )
+    temporary.replace(v6_config.TEST_SHOT_IMAGE)
+    _save_state(v6_config.TEST_SHOT_STATE, {
+        "status": "complete",
+        "source": "scheduled_preflight",
+        "mission_key": mission_key,
+        "requested_at": completed_at,
+        "completed_at": completed_at,
+        "source_name": source.name,
+        "image": str(v6_config.TEST_SHOT_IMAGE),
+    })
 
 
 def recent_success(path: Path, mission_key: str, max_age_seconds: float) -> dict | None:
@@ -92,7 +141,11 @@ def _run_camera_alive_test_locked(mission_key: str) -> dict:
         active_low=v6_config.RELAY_ACTIVE_LOW,
     ) as camera:
         camera.take_picture(v6_config.SHUTTER_PULSE_SECONDS)
-        time.sleep(v6_config.CAMERA_ALIVE_WRITE_SETTLE_SECONDS)
+        # The camera is in aperture priority and may still be exposing long
+        # after the relay releases. AF cleanup during that exposure can disturb
+        # the remote state, while enabling USB too early makes a valid delayed
+        # JPEG look like a failed capture.
+        time.sleep(v6_config.CAMERA_ALIVE_CAPTURE_SETTLE_SECONDS)
         camera.clear_half_press(v6_config.HALF_PRESS_CLEAR_SECONDS)
 
     time.sleep(v6_config.CAMERA_ALIVE_USB_SETTLE_SECONDS)
@@ -102,13 +155,17 @@ def _run_camera_alive_test_locked(mission_key: str) -> dict:
         created = new_jpegs(before, after)
         if not created:
             raise RuntimeError("camera did not create a new JPEG")
+        checked_at = datetime.now().astimezone().isoformat(timespec="seconds")
+        preview_source = root / created[-1]
+        _save_test_shot_preview(preview_source, mission_key, checked_at)
         for relative in created:
             (root / relative).unlink()
         payload = {
             "status": "ok",
             "mission_key": mission_key,
-            "checked_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "checked_at": checked_at,
             "created_and_deleted": created,
+            "preview": str(v6_config.TEST_SHOT_IMAGE),
         }
         _save_state(v6_config.CAMERA_ALIVE_STATE, payload)
         return payload

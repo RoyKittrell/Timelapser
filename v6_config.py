@@ -38,6 +38,12 @@ SCHEDULER_PAUSE_FILE = CONTROL_DIR / "scheduler_paused.json"
 PREFLIGHT_ALERT_FILE = CONTROL_DIR / "director_preflight_alert.json"
 CAMERA_ALIVE_STATE = CONTROL_DIR / "camera_alive.json"
 CAMERA_OPERATION_LOCK = CONTROL_DIR / "camera_operation.lock"
+TEST_SHOT_DIR = CONTROL_DIR / "test_shots"
+TEST_SHOT_IMAGE = TEST_SHOT_DIR / "latest.jpg"
+TEST_SHOT_STATE = TEST_SHOT_DIR / "latest.json"
+TEST_SHOT_MAX_AGE_SECONDS = float(
+    os.environ.get("TIMELAPSER_V6_TEST_SHOT_MAX_AGE_SECONDS", "86400")
+)
 
 # A successful physical camera check in the preflight window can be reused at
 # mission start. The normal scheduler preflight is ten minutes before capture.
@@ -47,8 +53,11 @@ CAMERA_ALIVE_MAX_AGE_SECONDS = float(
 CAMERA_ALIVE_DEVICE_TIMEOUT_SECONDS = float(
     os.environ.get("TIMELAPSER_V6_CAMERA_ALIVE_DEVICE_TIMEOUT_SECONDS", "45")
 )
-CAMERA_ALIVE_WRITE_SETTLE_SECONDS = float(
-    os.environ.get("TIMELAPSER_V6_CAMERA_ALIVE_WRITE_SETTLE_SECONDS", "10")
+# Total time after the shutter pulse for the aperture-priority exposure and SD
+# write to complete before AF cleanup. Night testing currently peaks near six
+# seconds, so 15 seconds provides comfortable headroom without delaying preflight.
+CAMERA_ALIVE_CAPTURE_SETTLE_SECONDS = float(
+    os.environ.get("TIMELAPSER_V6_CAMERA_ALIVE_CAPTURE_SETTLE_SECONDS", "15")
 )
 CAMERA_ALIVE_USB_SETTLE_SECONDS = float(
     os.environ.get("TIMELAPSER_V6_CAMERA_ALIVE_USB_SETTLE_SECONDS", "20")

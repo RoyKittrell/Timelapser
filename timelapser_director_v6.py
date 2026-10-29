@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -24,7 +25,7 @@ import v6_config
 import mega4_usb_import
 import timelapser_scheduler as scheduler_core
 from enclosure_sensor import read_sht3x
-from v6_camera_alive import run_camera_alive_test
+from v6_camera_alive import ensure_camera_alive, purge_stale_test_shot
 from v6_intervalometer import WiredCamera
 
 
@@ -38,9 +39,9 @@ WAKE_PULSE_SECONDS = getattr(v6_config, "WAKE_PULSE_SECONDS", 0.5)
 WAKE_SETTLE_SECONDS = getattr(v6_config, "WAKE_SETTLE_SECONDS", 2.0)
 FOCUS_PULSE_SECONDS = getattr(v6_config, "FOCUS_PULSE_SECONDS", 2.0)
 FOCUS_SETTLE_SECONDS = getattr(v6_config, "FOCUS_SETTLE_SECONDS", 0.75)
-TEST_SHOT_DIR = v6_config.CONTROL_DIR / "test_shots"
-TEST_SHOT_IMAGE = TEST_SHOT_DIR / "latest.jpg"
-TEST_SHOT_STATE = TEST_SHOT_DIR / "latest.json"
+TEST_SHOT_DIR = v6_config.TEST_SHOT_DIR
+TEST_SHOT_IMAGE = v6_config.TEST_SHOT_IMAGE
+TEST_SHOT_STATE = v6_config.TEST_SHOT_STATE
 ENCLOSURE_CLIMATE_CACHE = v6_config.CONTROL_DIR / "enclosure_climate.json"
 ACTIVE_CAMERA_JOB_PATTERNS = (
     "timelapser_v6.py",
@@ -49,6 +50,11 @@ ACTIVE_CAMERA_JOB_PATTERNS = (
     "render_timelapse.py",
     "instagram_auto_publish.py",
 )
+MANUAL_CAPTURE_LOG = v6_config.CONTROL_DIR / "manual_capture.log"
+PENDING_MANUAL_CAPTURE = v6_config.CONTROL_DIR / "pending_manual_capture.json"
+MAX_MANUAL_CAPTURE_MINUTES = 12 * 60
+MANUAL_OUTPUT_FPS = 30.0
+MANUAL_CONFIRMATION_MINUTES = 10
 
 load_dotenv(ENV_FILE)
 
@@ -77,14 +83,21 @@ st.markdown(
 
 
 def next_scheduled_mission():
-    schedule_path = Path(__file__).resolve().parent / "schedule_v6.py"
-    spec = importlib.util.spec_from_file_location("dashboard_schedule_v6", schedule_path)
+    # schedule_v6 imports schedule.py with ``from schedule import *``. In this
+    # long-running Streamlit process that underlying module can remain cached
+    # after the calendar is regenerated, so read the mission source directly.
+    schedule_path = Path(__file__).resolve().parent / "schedule.py"
+    spec = importlib.util.spec_from_file_location("dashboard_schedule", schedule_path)
     if spec is None or spec.loader is None:
         return None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     now = datetime.now().astimezone()
-    future = [mission for mission in scheduler_core.build_missions(module) if mission.end_dt > now]
+    future = [
+        mission
+        for mission in scheduler_core.build_missions(module)
+        if mission.enabled and mission.end_dt > now
+    ]
     return min(future, key=lambda mission: mission.start_dt) if future else None
 
 
@@ -165,6 +178,12 @@ def format_duration(seconds: float | None) -> str:
         return f"{hours}h {minutes:02d}m"
     if minutes:
         return f"{minutes}m {secs:02d}s"
+
+
+def format_total_time_left(seconds: float) -> str:
+    total_minutes = max(0, math.ceil(seconds / 60))
+    hours, minutes = divmod(total_minutes, 60)
+    return f"Estimated {hours}hrs {minutes}min left"
     return f"{secs}s"
 
 
@@ -508,6 +527,14 @@ def render_workflow_overview(run_dir: Path, manifest: dict) -> None:
         overall = 1.0
     else:
         overall = active_group / len(WORKFLOW_GROUPS)
+
+    remaining_estimates = [
+        estimate
+        for _, state, estimate in group_states
+        if state in {"Running", "Waiting"} and estimate is not None
+    ]
+    if remaining_estimates:
+        st.markdown(f"**{format_total_time_left(sum(remaining_estimates))}**")
     st.progress(min(1.0, overall))
     for label, state, estimate in group_states:
         timing = ""
@@ -519,6 +546,18 @@ def render_workflow_overview(run_dir: Path, manifest: dict) -> None:
 
 
 def render_primary_status() -> None:
+    streak, total_published = publication_counts()
+    reliability_cols = st.columns(2)
+    reliability_cols[0].metric(
+        "Autonomous IG streak",
+        f"{streak} timelapse{'s' if streak != 1 else ''}",
+    )
+    reliability_cols[1].metric(
+        "Published timelapses",
+        str(total_published),
+    )
+    st.caption("Consecutive scheduled sunrise/sunset runs successfully published to Instagram.")
+
     active = read_json(v6_config.ACTIVE_RUN)
     active_dir = Path(str(active.get("run_dir") or ""))
     if active.get("status") in {"starting", "capturing"} and active_dir.is_dir():
@@ -538,9 +577,15 @@ def render_primary_status() -> None:
     latest = latest_runs[0] if latest_runs else None
     if latest is not None:
         live = read_json(latest / "postprocess_live_status.json")
-        if live.get("status") == "running":
+        if live.get("status") in {"running", "paused_for_capture"}:
             manifest = live_manifest(latest)
-            st.subheader("Processing timelapse")
+            if live.get("status") == "paused_for_capture":
+                st.subheader("Processing paused for scheduled timelapse")
+                mission = str(live.get("paused_for_mission") or "the next capture")
+                stage = str(live.get("paused_step") or "processing").replace("_", " ")
+                st.info(f"Paused during {stage}; it will resume after {mission}.")
+            else:
+                st.subheader("Processing timelapse")
             st.metric("Mission", str(manifest.get("mode") or "general").title())
             render_workflow_overview(latest, manifest)
             return
@@ -596,6 +641,48 @@ def runs() -> list[Path]:
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
+
+
+def publication_counts() -> tuple[int, int]:
+    streak = 0
+    total_published = 0
+    streak_intact = True
+    # Run names begin with YYYYMMDD_HHMMSS and are the capture chronology;
+    # modification times change later during retries and maintenance.
+    for run_dir in sorted(runs(), key=lambda path: path.name, reverse=True):
+        manifest = read_json(run_dir / "run_manifest.json")
+        capture_status = str(manifest.get("status") or "")
+        post_summary = read_json(run_dir / "postprocess_workflow_summary.json")
+        live_summary = read_json(run_dir / "postprocess_live_status.json")
+        publish_receipt = read_json(run_dir / "instagram_publish_receipt.json")
+        post_status = str(post_summary.get("status") or "")
+
+        # General and manual tests are outside the autonomous publishing streak.
+        if str(manifest.get("mode") or "") not in {"sunrise", "sunset"}:
+            continue
+
+        # A run still capturing or processing has not earned or broken the streak.
+        if capture_status in {"starting", "capturing"}:
+            continue
+        if live_summary.get("status") == "running":
+            continue
+
+        finalized = (
+            capture_status.startswith(("failed", "aborted", "stopped"))
+            or (post_status and post_status not in {"running", "waiting"})
+            or bool(publish_receipt)
+        )
+        if not finalized:
+            continue
+
+        published = publish_receipt.get("status") == "complete"
+        if published:
+            total_published += 1
+            if streak_intact:
+                streak += 1
+        else:
+            streak_intact = False
+    return streak, total_published
 
 
 def count_rows(path: Path) -> int:
@@ -808,6 +895,255 @@ def set_scheduler_paused(paused: bool, reason: str) -> str:
     return "Scheduled V6 captures are enabled again."
 
 
+def parse_manual_capture_request(text: str) -> tuple[float, float, bool] | None:
+    """Return duration, cadence, and explicit Reel publishing intent."""
+    normalized = text.lower().strip()
+    timelapse_mentioned = bool(re.search(r"\b(time[ -]?lapse|timelapse)\b", normalized))
+    action_requested = bool(re.search(
+        r"\b(start|run|begin|launch|do|make|create|take|capture|set up)\b",
+        normalized,
+    ))
+    action_negated = bool(re.search(
+        r"\b(?:do not|don't|dont|never)\s+"
+        r"(?:start|run|begin|launch|do|make|create|take|capture|set up)\b",
+        normalized,
+    ))
+    if not timelapse_mentioned or not action_requested or action_negated:
+        return None
+
+    duration_match = re.search(
+        r"\b(?:for\s+)?(\d+(?:\.\d+)?)[\s-]*(hours?|hrs?|hr|h|minutes?|mins?|min|m)\b",
+        normalized,
+    )
+    interval_match = re.search(
+        r"\b(?:at|every|cadence(?:\s+of)?|interval(?:\s+of)?)\s*"
+        r"(\d+(?:\.\d+)?)[\s-]*(seconds?|secs?|sec|s)\b",
+        normalized,
+    )
+    if interval_match is None:
+        interval_match = re.search(
+            r"\b(\d+(?:\.\d+)?)[\s-]*(seconds?|secs?|sec|s)\s*(?:cadence|interval)\b",
+            normalized,
+        )
+    if duration_match is None or interval_match is None:
+        return None
+
+    duration = float(duration_match.group(1))
+    duration_unit = duration_match.group(2)
+    duration_minutes = duration * 60 if duration_unit.startswith("h") else duration
+    interval_seconds = float(interval_match.group(1))
+    instagram_mentioned = bool(re.search(r"\b(ig|instagram)\b", normalized))
+    publish_verb = bool(re.search(r"\b(post|publish|upload|share)\b", normalized))
+    publish_denied = bool(re.search(
+        r"\b(?:do not|don't|dont|no|without)\b.{0,24}\b(?:ig|instagram|publish|post|upload)\b",
+        normalized,
+    ))
+    publish_reel = instagram_mentioned and publish_verb and not publish_denied
+    return duration_minutes, interval_seconds, publish_reel
+
+
+def manual_capture_request_error(text: str) -> str | None:
+    """Explain incomplete manual capture requests before the AI fallback."""
+    normalized = text.lower().strip()
+    if not re.search(r"\b(time[ -]?lapse|timelapse)\b", normalized):
+        return None
+    if not re.search(r"\b(start|run|begin|launch|do|make|create|take|capture|set up)\b", normalized):
+        return None
+    if re.search(
+        r"\b(?:do not|don't|dont|never)\s+"
+        r"(?:start|run|begin|launch|do|make|create|take|capture|set up)\b",
+        normalized,
+    ):
+        return None
+
+    has_duration = bool(re.search(
+        r"\b(?:for\s+)?\d+(?:\.\d+)?[\s-]*"
+        r"(?:hours?|hrs?|hr|h|minutes?|mins?|min|m)\b",
+        normalized,
+    ))
+    has_cadence = bool(re.search(
+        r"\b\d+(?:\.\d+)?[\s-]*(?:seconds?|secs?|sec|s)\b",
+        normalized,
+    ))
+    if has_duration and has_cadence:
+        return None
+    missing = []
+    if not has_duration:
+        missing.append("duration, such as 2 hours")
+    if not has_cadence:
+        missing.append("cadence, such as every 2 seconds")
+    return "I can prepare that manual timelapse, but I still need " + " and ".join(missing) + "."
+
+
+def manual_timelapse_refusal(duration_minutes: float, interval_seconds: float) -> str | None:
+    if duration_minutes <= 0 or duration_minutes > MAX_MANUAL_CAPTURE_MINUTES:
+        return "Manual capture duration must be greater than zero and no longer than 12 hours."
+    if interval_seconds < v6_config.MIN_INTERVAL_SECONDS:
+        return f"Manual capture cadence must be at least {v6_config.MIN_INTERVAL_SECONDS:g} seconds."
+    if interval_seconds <= v6_config.SHUTTER_PULSE_SECONDS:
+        return "Manual capture cadence must be longer than the shutter relay pulse."
+
+    active = active_camera_jobs()
+    if active:
+        return "Manual timelapse refused because capture or post-processing is already active."
+    if camera_is_usb_storage():
+        return "Manual timelapse refused because the Olympus is in USB storage mode."
+
+    output_root = v6_config.DEFAULT_OUTPUT_ROOT
+    if not output_root.parent.is_mount():
+        return f"Manual timelapse refused because the output drive is not mounted: {output_root.parent}"
+
+    now = datetime.now().astimezone()
+    capture_end = now + timedelta(minutes=duration_minutes)
+    next_mission = next_scheduled_mission()
+    if next_mission and capture_end >= next_mission.preflight_dt:
+        return (
+            "Manual timelapse refused because it would overlap the next scheduled preflight at "
+            f"{next_mission.preflight_dt.strftime('%H:%M')}."
+        )
+    return None
+
+
+def human_duration(seconds: float) -> str:
+    rounded = max(0, round(seconds))
+    hours, remainder = divmod(rounded, 3600)
+    minutes, secs = divmod(remainder, 60)
+    parts = []
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes:
+        parts.append(f"{minutes}m")
+    if secs or not parts:
+        parts.append(f"{secs}s")
+    return " ".join(parts)
+
+
+def prepare_manual_timelapse(
+    duration_minutes: float,
+    interval_seconds: float,
+    publish_reel: bool = False,
+) -> str:
+    refusal = manual_timelapse_refusal(duration_minutes, interval_seconds)
+    if refusal:
+        return refusal
+
+    now = datetime.now().astimezone()
+    max_frames = max(1, math.floor(duration_minutes * 60 / interval_seconds))
+    video_seconds = max_frames / MANUAL_OUTPUT_FPS
+    payload = {
+        "status": "awaiting_confirmation",
+        "created_at": now.isoformat(timespec="seconds"),
+        "expires_at": (now + timedelta(minutes=MANUAL_CONFIRMATION_MINUTES)).isoformat(timespec="seconds"),
+        "duration_minutes": duration_minutes,
+        "interval_seconds": interval_seconds,
+        "max_frames": max_frames,
+        "output_fps": MANUAL_OUTPUT_FPS,
+        "video_seconds": video_seconds,
+        "publish_reel": bool(publish_reel),
+    }
+    v6_config.CONTROL_DIR.mkdir(parents=True, exist_ok=True)
+    temporary = PENDING_MANUAL_CAPTURE.with_suffix(".tmp")
+    temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(PENDING_MANUAL_CAPTURE)
+
+    return (
+        "Manual timelapse ready for confirmation:\n\n"
+        f"- Type: General\n"
+        f"- Capture time: {human_duration(duration_minutes * 60)}\n"
+        f"- Cadence: every {interval_seconds:g}s\n"
+        f"- Expected triggers: up to {max_frames:,}\n"
+        f"- Resulting video: approximately {human_duration(video_seconds)} at {MANUAL_OUTPUT_FPS:g} fps\n"
+        f"- Camera: wake and autofocus once at startup\n"
+        f"- Storage: {v6_config.DEFAULT_OUTPUT_ROOT}\n"
+        f"- Instagram: {'Reel only' if publish_reel else 'disabled'}\n\n"
+        f"Reply **Confirm start** within {MANUAL_CONFIRMATION_MINUTES} minutes to begin, or **Cancel**."
+    )
+
+
+def confirm_manual_timelapse() -> str:
+    pending = read_json(PENDING_MANUAL_CAPTURE)
+    if pending.get("status") != "awaiting_confirmation":
+        return "There is no manual timelapse awaiting confirmation."
+    try:
+        expires_at = datetime.fromisoformat(str(pending["expires_at"]))
+        duration_minutes = float(pending["duration_minutes"])
+        interval_seconds = float(pending["interval_seconds"])
+        publish_reel = bool(pending.get("publish_reel", False))
+    except (KeyError, TypeError, ValueError):
+        PENDING_MANUAL_CAPTURE.unlink(missing_ok=True)
+        return "The pending manual timelapse request was invalid and has been discarded."
+    if datetime.now().astimezone() > expires_at:
+        PENDING_MANUAL_CAPTURE.unlink(missing_ok=True)
+        return "The pending manual timelapse confirmation expired. Please request it again."
+
+    PENDING_MANUAL_CAPTURE.unlink(missing_ok=True)
+    return start_manual_timelapse(duration_minutes, interval_seconds, publish_reel=publish_reel)
+
+
+def cancel_manual_timelapse() -> str:
+    if not PENDING_MANUAL_CAPTURE.exists():
+        return "There is no manual timelapse awaiting confirmation."
+    PENDING_MANUAL_CAPTURE.unlink(missing_ok=True)
+    return "The pending manual timelapse was cancelled. Nothing was started."
+
+
+def start_manual_timelapse(
+    duration_minutes: float,
+    interval_seconds: float,
+    *,
+    publish_reel: bool = False,
+) -> str:
+    refusal = manual_timelapse_refusal(duration_minutes, interval_seconds)
+    if refusal:
+        return refusal
+
+    preflight_key = f"manual-{datetime.now().astimezone().strftime('%Y%m%d-%H%M%S')}"
+    camera_ok, camera_message = ensure_camera_alive(preflight_key)
+    if not camera_ok:
+        return f"Manual timelapse refused: {camera_message}"
+
+    max_frames = max(1, math.floor(duration_minutes * 60 / interval_seconds))
+    now = datetime.now().astimezone()
+    command = [
+        sys.executable,
+        str(v6_config.PROJECT_ROOT / "timelapser_v6.py"),
+        "--mode", "general",
+        "--interval", str(interval_seconds),
+        "--max-frames", str(max_frames),
+        "--max-run-minutes", str(duration_minutes),
+        "--defer-postprocess",
+    ]
+    if publish_reel:
+        command.append("--publish-instagram-reel")
+    v6_config.CONTROL_DIR.mkdir(parents=True, exist_ok=True)
+    with MANUAL_CAPTURE_LOG.open("a", encoding="utf-8") as log:
+        log.write(
+            f"\n{now.isoformat(timespec='seconds')} DIRECTOR MANUAL START: "
+            f"duration={duration_minutes:g}m interval={interval_seconds:g}s frames={max_frames}\n"
+        )
+        log.flush()
+        process = subprocess.Popen(
+            command,
+            cwd=str(v6_config.PROJECT_ROOT),
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+
+    time.sleep(0.75)
+    if process.poll() is not None:
+        return (
+            "The manual timelapse process exited during startup. "
+            f"Check {MANUAL_CAPTURE_LOG} for details."
+        )
+    return (
+        f"Started a general {duration_minutes:g}-minute timelapse at {interval_seconds:g}-second "
+        f"cadence (up to {max_frames:,} frames, PID {process.pid}). "
+        "Post-processing is deferred and "
+        + ("only the Reel will publish to Instagram." if publish_reel else "Instagram publishing is disabled.")
+    )
+
+
 def request_power_action(action: str, *, force: bool) -> str:
     helper_action = {
         ("reboot", False): "request",
@@ -875,15 +1211,7 @@ def run_director_preflight() -> str:
         ok = False
         checks.append("FAIL gpiozero is unavailable")
 
-    if ok:
-        try:
-            result = run_camera_alive_test("manual_preflight")
-            created = result.get("created_and_deleted", [])
-            name = Path(created[-1]).name if created else "new JPEG"
-            checks.append(f"OK camera alive: captured, verified, and deleted {name}")
-        except Exception as exc:
-            ok = False
-            checks.append(f"FAIL camera alive test: {type(exc).__name__}: {exc}")
+    checks.append("OK camera USB left untouched; physical capture is not tested during preflight")
 
     heading = "PREFLIGHT PASSED" if ok else "PREFLIGHT ATTENTION NEEDED"
     return heading + "\n\n" + "\n".join(f"- {line}" for line in checks)
@@ -891,6 +1219,19 @@ def run_director_preflight() -> str:
 
 def handle_director_command(text: str) -> str | None:
     normalized = text.lower().strip()
+    if re.search(r"\b(cancel|discard|never mind|nevermind)\b", normalized) and PENDING_MANUAL_CAPTURE.exists():
+        return cancel_manual_timelapse()
+    if PENDING_MANUAL_CAPTURE.exists() and (
+        normalized in {"confirm", "confirm start", "yes", "yes start", "start it", "proceed"}
+        or re.search(r"\b(go ahead|confirm(?: and)? start|yes,? start it)\b", normalized)
+    ):
+        return confirm_manual_timelapse()
+    manual_capture = parse_manual_capture_request(text)
+    if manual_capture is not None:
+        return prepare_manual_timelapse(*manual_capture)
+    manual_capture_error = manual_capture_request_error(text)
+    if manual_capture_error is not None:
+        return manual_capture_error
     if re.search(r"\bpre[ -]?flight\b", normalized) and re.search(
         r"\b(check|test|run|now)\b", normalized
     ):
@@ -1075,6 +1416,7 @@ st.caption(
     "the remote state, then uses MEGA4 USB storage to download and release the newest JPEG."
 )
 
+purge_stale_test_shot()
 test_shot = read_json(TEST_SHOT_STATE)
 if test_shot.get("status") == "complete" and TEST_SHOT_IMAGE.exists():
     st.image(
@@ -1117,7 +1459,9 @@ else:
 st.subheader("Apple Photos")
 clean_reel = run_dir / f"{run_dir.name}_final_instagram-reel_clean.mp4"
 photos_request = read_json(run_dir / "photos_import_request.json")
-request_active = photos_request.get("status") in {"requested", "processing"}
+request_active = photos_request.get("status") in {
+    "requested", "processing", "waiting_for_unlock",
+}
 if st.button(
     "Download clean video to Mac Photos",
     use_container_width=True,

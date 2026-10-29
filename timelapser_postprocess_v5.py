@@ -284,11 +284,21 @@ def _queue_instagram_reel(log_path: Path, run_dir: Path, cwd: Path, python: str,
     return _run_step(log_path, "queue_instagram_reel", cmd, cwd)
 
 
-def _publish_instagram(log_path: Path, run_dir: Path, cwd: Path, python: str) -> dict:
+def _publish_instagram(
+    log_path: Path,
+    run_dir: Path,
+    cwd: Path,
+    python: str,
+    *,
+    reel_only: bool = False,
+) -> dict:
+    command = [python, str(cwd / "instagram_auto_publish.py"), str(run_dir)]
+    if reel_only:
+        command.append("--skip-carousel")
     return _run_step(
         log_path,
-        "publish_instagram_carousel_and_reel",
-        [python, str(cwd / "instagram_auto_publish.py"), str(run_dir)],
+        "publish_instagram_reel_only" if reel_only else "publish_instagram_carousel_and_reel",
+        command,
         cwd,
     )
 
@@ -309,6 +319,7 @@ def run_postprocess(
     render: bool,
     queue_instagram: bool = True,
     publish_instagram: bool = True,
+    instagram_reel_only: bool = False,
     copy_videos_to_mac: bool,
     mac_video_dest: str | None = None,
     initial_completed_steps: tuple[str, ...] = (),
@@ -320,6 +331,14 @@ def run_postprocess(
     summary_path = run_dir / "postprocess_workflow_summary.json"
     dest = mac_video_dest or os.environ.get("TIMELAPSER_MAC_VIDEO_DEST") or DEFAULT_MAC_VIDEO_DEST
     python = _python_executable()
+    completed_before_resume = set(initial_completed_steps)
+
+    def already_complete(name: str) -> bool:
+        return name in completed_before_resume
+
+    def resumed_step(name: str) -> dict:
+        _log(log_path, f"RESUME skip completed step: {name}")
+        return {"name": name, "returncode": 0, "resumed_skip": True, "elapsed_seconds": 0.0}
 
     summary = {
         "started_at": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -329,6 +348,7 @@ def run_postprocess(
         "render": bool(render),
         "queue_instagram": bool(queue_instagram),
         "publish_instagram": bool(publish_instagram),
+        "instagram_reel_only": bool(instagram_reel_only),
         "copy_videos_to_mac": bool(copy_videos_to_mac),
         "mac_video_dest": dest,
         "steps": [],
@@ -352,7 +372,7 @@ def run_postprocess(
         _log(log_path, "TIMELAPSER V5 POST-RUN WORKFLOW")
         _log(log_path, f"Run directory: {run_dir}")
 
-        if download_fullres:
+        if download_fullres and not already_complete("import_fullres_jpegs_via_mega4_usb"):
             step = _run_step(
                 log_path,
                 "import_fullres_jpegs_via_mega4_usb",
@@ -372,15 +392,20 @@ def run_postprocess(
             fullres_source = run_dir / "frames_full_jpeg"
             smoothed_source = run_dir / SMOOTHED_FRAME_DIRNAME
 
-            _write_live_status(log_path, status="running", current_step="validate_and_repair_jpegs")
-            step = _repair_unreadable_frames(run_dir, fullres_source, log_path)
-            summary["steps"].append(step)
-            _write_live_status(log_path, current_step="", completed_step=step["name"])
-            _log(log_path, f"JPEG check: {step['checked']} checked, {step['repaired']} repaired")
-            if step["checked"] < 3:
-                raise RuntimeError(f"Need at least 3 full-resolution JPEGs, found {step['checked']}")
+            if already_complete("validate_and_repair_jpegs"):
+                summary["steps"].append(resumed_step("validate_and_repair_jpegs"))
+            else:
+                _write_live_status(log_path, status="running", current_step="validate_and_repair_jpegs")
+                step = _repair_unreadable_frames(run_dir, fullres_source, log_path)
+                summary["steps"].append(step)
+                _write_live_status(log_path, current_step="", completed_step=step["name"])
+                _log(log_path, f"JPEG check: {step['checked']} checked, {step['repaired']} repaired")
+                if step["checked"] < 3:
+                    raise RuntimeError(f"Need at least 3 full-resolution JPEGs, found {step['checked']}")
 
-            if smooth_exposure:
+            if smooth_exposure and already_complete("smooth_exposure_v2"):
+                summary["steps"].append(resumed_step("smooth_exposure_v2"))
+            elif smooth_exposure:
                 step = _run_step(
                     log_path,
                     "smooth_exposure_v2",
@@ -402,51 +427,59 @@ def run_postprocess(
                     return summary
 
             source = smoothed_source if smooth_exposure else fullres_source
-            if smooth_exposure:
+            if smooth_exposure and already_complete("validate_smoothed_jpegs"):
+                summary["steps"].append(resumed_step("validate_smoothed_jpegs"))
+            elif smooth_exposure:
                 _write_live_status(log_path, status="running", current_step="validate_smoothed_jpegs")
                 step = _repair_unreadable_frames(run_dir, source, log_path)
                 summary["steps"].append(step)
                 _write_live_status(log_path, current_step="", completed_step="validate_smoothed_jpegs")
                 _log(log_path, f"Smoothed JPEG check: {step['checked']} checked, {step['repaired']} repaired")
-            step = _run_step(
-                log_path,
-                "render_videos",
-                [
-                    python,
-                    str(root / "render_timelapse.py"),
-                    str(run_dir),
-                    "--source",
-                    str(source),
-                    "--output-stem-suffix",
-                    "_final",
-                    "--brightness-source",
-                    "frames",
-                    "--overwrite",
-                ],
-                root,
-            )
-            summary["steps"].append(step)
-            if step["returncode"] != 0:
-                summary["status"] = "failed_render"
-                return summary
+            if already_complete("render_videos"):
+                summary["steps"].append(resumed_step("render_videos"))
+            else:
+                step = _run_step(
+                    log_path,
+                    "render_videos",
+                    [
+                        python,
+                        str(root / "render_timelapse.py"),
+                        str(run_dir),
+                        "--source",
+                        str(source),
+                        "--output-stem-suffix",
+                        "_final",
+                        "--brightness-source",
+                        "frames",
+                        "--overwrite",
+                    ],
+                    root,
+                )
+                summary["steps"].append(step)
+                if step["returncode"] != 0:
+                    summary["status"] = "failed_render"
+                    return summary
 
-            step = _run_step(
-                log_path,
-                "create_instagram_carousel_formats",
-                [
-                    python,
-                    str(root / "instagram_formats.py"),
-                    str(run_dir),
-                    "--overwrite",
-                ],
-                root,
-            )
-            summary["steps"].append(step)
-            if step["returncode"] != 0:
-                summary["status"] = "failed_instagram_formats"
-                return summary
+            if already_complete("create_instagram_carousel_formats"):
+                summary["steps"].append(resumed_step("create_instagram_carousel_formats"))
+            else:
+                step = _run_step(
+                    log_path,
+                    "create_instagram_carousel_formats",
+                    [
+                        python,
+                        str(root / "instagram_formats.py"),
+                        str(run_dir),
+                        "--overwrite",
+                    ],
+                    root,
+                )
+                summary["steps"].append(step)
+                if step["returncode"] != 0:
+                    summary["status"] = "failed_instagram_formats"
+                    return summary
 
-        if queue_instagram:
+        if queue_instagram and not already_complete("queue_instagram_reel"):
             final_reel = run_dir / f"{run_dir.name}_final_instagram-reel_clean.mp4"
             step = _queue_instagram_reel(
                 log_path,
@@ -460,20 +493,27 @@ def run_postprocess(
                 summary["status"] = "failed_queue_instagram"
                 return summary
 
-        if publish_instagram and render:
-            step = _publish_instagram(log_path, run_dir, root, python)
+        publish_step_name = "publish_instagram_reel_only" if instagram_reel_only else "publish_instagram_carousel_and_reel"
+        if publish_instagram and render and not already_complete(publish_step_name):
+            step = _publish_instagram(
+                log_path,
+                run_dir,
+                root,
+                python,
+                reel_only=instagram_reel_only,
+            )
             summary["steps"].append(step)
             if step["returncode"] != 0:
                 summary["status"] = "failed_publish_instagram"
                 return summary
 
-        if copy_videos_to_mac:
+        if copy_videos_to_mac and not already_complete("copy_videos_to_mac"):
             step = _copy_videos_to_mac(log_path, run_dir, dest, root)
             summary["steps"].append(step)
             if step["returncode"] != 0:
                 _log(log_path, "Optional copy to Mac failed; continuing the completed media workflow")
 
-        if render:
+        if render and not already_complete("prune_rendered_images_older_than_30_days"):
             step = _run_step(
                 log_path,
                 "prune_rendered_images_older_than_30_days",
@@ -485,6 +525,7 @@ def run_postprocess(
                 summary["status"] = "failed_image_retention"
                 return summary
 
+        if render and not already_complete("update_timelapse_catalog"):
             step = _run_step(
                 log_path,
                 "update_timelapse_catalog",

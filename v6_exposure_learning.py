@@ -11,12 +11,15 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
-from v6_exposure_model import DEFAULT_CALIBRATION_PATH, EXPECTED_APERTURE, EXPECTED_ISO
+from v6_exposure_model import DEFAULT_CALIBRATION_PATH, EXPECTED_APERTURE
 
 BIN_MINUTES = 2.0
 MAX_RUNS_PER_MODE = 12
 MIN_FRAMES_PER_RUN = 100
 UPPER_PERCENTILE = 0.90
+MODEL_SETTINGS_EPOCH = datetime.fromisoformat("2026-10-28T18:13:17+08:00")
+EXPECTED_ISO_MIN = 200
+EXPECTED_ISO_MAX = 400
 
 
 def read_json(path: Path) -> dict:
@@ -45,7 +48,10 @@ def valid_run_samples(run_dir: Path) -> tuple[str, list[tuple[float, float]]] | 
         return None
     try:
         event_time = datetime.fromisoformat(str(manifest["event_time"]))
+        started_at = datetime.fromisoformat(str(manifest["started_at"]))
     except (KeyError, TypeError, ValueError):
+        return None
+    if started_at < MODEL_SETTINGS_EPOCH:
         return None
 
     samples: list[tuple[float, float]] = []
@@ -61,7 +67,11 @@ def valid_run_samples(run_dir: Path) -> tuple[str, list[tuple[float, float]]] | 
                     aperture = float(row["actual_aperture"])
                 except (KeyError, TypeError, ValueError):
                     continue
-                if shutter <= 0 or abs(iso - EXPECTED_ISO) > 1 or abs(aperture - EXPECTED_APERTURE) > 0.35:
+                if (
+                    shutter <= 0
+                    or not EXPECTED_ISO_MIN <= iso <= EXPECTED_ISO_MAX
+                    or abs(aperture - EXPECTED_APERTURE) > 0.35
+                ):
                     continue
                 offset = (captured - event_time).total_seconds() / 60.0
                 samples.append((offset, shutter))
@@ -107,8 +117,14 @@ def learn(runs_root: Path, output: Path) -> dict:
         }
 
     payload = {
-        "version": 1,
+        "version": 2,
         "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "settings_epoch": MODEL_SETTINGS_EPOCH.isoformat(),
+        "settings_profile": {
+            "iso_min": EXPECTED_ISO_MIN,
+            "iso_max": EXPECTED_ISO_MAX,
+            "preferred_max_shutter_seconds": 2.0,
+        },
         "modes": modes,
     }
     output.parent.mkdir(parents=True, exist_ok=True)
