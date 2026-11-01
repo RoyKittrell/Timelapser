@@ -1449,9 +1449,24 @@ if completed_workflow(post):
     if telemetry_path.exists():
         data = pd.read_csv(telemetry_path)
         st.subheader("Completed-run image data")
-        graph_cols = [name for name in ("median", "actual_iso", "actual_shutter_seconds", "actual_aperture") if name in data]
-        if graph_cols:
-            st.line_chart(data[graph_cols], height=260)
+        chart_specs = (
+            ("actual_aperture", "Aperture", "f-number"),
+            ("actual_iso", "ISO", "ISO sensitivity"),
+            ("actual_shutter_seconds", "Shutter speed", "Seconds"),
+        )
+        for column, title, axis_label in chart_specs:
+            if column not in data:
+                continue
+            values = pd.to_numeric(data[column], errors="coerce")
+            if not values.notna().any():
+                continue
+            st.markdown(f"**{title}**")
+            st.line_chart(
+                pd.DataFrame({axis_label: values}),
+                x_label="Frame",
+                y_label=axis_label,
+                height=220,
+            )
         st.caption("Extracted from full JPEGs after USB import; rendering and publishing are complete.")
 else:
     st.info("Exposure and brightness graphs unlock after download, rendering, and upload all complete.")
