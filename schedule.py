@@ -57,7 +57,7 @@ DEFAULT_MAC_VIDEO_DEST = "roy@192.168.100.191:/Users/roy/Documents/ChatGPT/Timel
 # These are defaults only. Per-event entries below may override any value.
 DEFAULTS = {
     "sunrise": {
-        "start_offset_minutes": -70,
+        "start_offset_minutes": -40,
         "end_offset_minutes": 80,
         "interval": 5,
         "mode": "sunrise",
@@ -73,7 +73,7 @@ DEFAULTS = {
     },
     "sunset": {
         "start_offset_minutes": -75,
-        "end_offset_minutes": 100,
+        "end_offset_minutes": 70,
         "interval": 5,
         "mode": "sunset",
         "iso": 200,

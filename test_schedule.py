@@ -6,11 +6,11 @@ import timelapser_scheduler
 
 
 class ScheduleTests(unittest.TestCase):
-    def test_solar_capture_windows_include_thirty_extra_minutes_each_side(self):
-        self.assertEqual(schedule.DEFAULTS["sunrise"]["start_offset_minutes"], -70)
+    def test_solar_capture_windows_favor_the_brighter_side(self):
+        self.assertEqual(schedule.DEFAULTS["sunrise"]["start_offset_minutes"], -40)
         self.assertEqual(schedule.DEFAULTS["sunrise"]["end_offset_minutes"], 80)
         self.assertEqual(schedule.DEFAULTS["sunset"]["start_offset_minutes"], -75)
-        self.assertEqual(schedule.DEFAULTS["sunset"]["end_offset_minutes"], 100)
+        self.assertEqual(schedule.DEFAULTS["sunset"]["end_offset_minutes"], 70)
 
     def test_known_kuala_lumpur_solar_times(self):
         day = dt.date(2026, 10, 14)
