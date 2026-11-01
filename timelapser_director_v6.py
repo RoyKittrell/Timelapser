@@ -1450,7 +1450,6 @@ if completed_workflow(post):
         data = pd.read_csv(telemetry_path)
         st.subheader("Completed-run image data")
         chart_specs = (
-            ("actual_aperture", "Aperture", "f-number"),
             ("actual_iso", "ISO", "ISO sensitivity"),
             ("actual_shutter_seconds", "Shutter speed", "Seconds"),
         )
