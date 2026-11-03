@@ -27,6 +27,7 @@ SSH_OPTIONS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=12",
 FIELDS = ("source", "filename", "sha256", "status", "photos_id", "updated_at")
 PHOTOS_LOOKUP_TIMEOUT = 15
 PHOTOS_IMPORT_TIMEOUT = 180
+PHOTOS_ALBUM = "Timelapser.118"
 
 
 class PhotosUnavailable(RuntimeError):
@@ -170,6 +171,45 @@ end run'''
         raise RuntimeError(detail or "Apple Photos rejected the import") from error
 
 
+def add_to_album(filename, media_id="", album_name=PHOTOS_ALBUM):
+    script = '''on run argv
+    set targetName to item 1 of argv
+    set targetId to item 2 of argv
+    set albumName to item 3 of argv
+    tell application "Photos"
+        if targetId is not "" then
+            set matches to (every media item whose id is targetId)
+        else
+            set matches to (every media item whose filename is targetName)
+        end if
+        if (count of matches) is 0 then return ""
+        set targetItem to item 1 of matches
+        if not (exists album albumName) then
+            set targetAlbum to make new album named albumName
+        else
+            set targetAlbum to album albumName
+        end if
+        set resolvedId to id of targetItem
+        set albumMatches to (every media item of targetAlbum whose id is resolvedId)
+        if (count of albumMatches) is 0 then add {targetItem} to targetAlbum
+        return resolvedId
+    end tell
+end run'''
+    try:
+        return run(
+            ["osascript", "-e", script, filename, media_id, album_name],
+            capture_output=True,
+            timeout=PHOTOS_IMPORT_TIMEOUT,
+        ).stdout.strip()
+    except subprocess.TimeoutExpired as error:
+        raise PhotosUnavailable("Apple Photos did not respond while updating the album") from error
+    except subprocess.CalledProcessError as error:
+        detail = (error.stderr or "").strip()
+        if "-1712" in detail or "timed out" in detail.lower():
+            raise PhotosUnavailable("Apple Photos did not respond while updating the album") from error
+        raise RuntimeError(detail or f"Apple Photos could not update {album_name}") from error
+
+
 def pull(item):
     DEST.mkdir(exist_ok=True)
     target = DEST / item["name"]
@@ -214,10 +254,26 @@ def main():
             request_path = item.get("request_path")
             row = rows.get(name)
             if row and row["status"] == "imported":
-                print(f"Already imported: {name}")
-                if request_path:
-                    update_remote_request(request_path, "imported", "Already present in Apple Photos")
-                continue
+                try:
+                    identifier = add_to_album(name, row.get("photos_id", ""))
+                    if not identifier:
+                        raise RuntimeError(f"Imported video is no longer present in Apple Photos: {name}")
+                    rows[name].update(photos_id=identifier,
+                                      updated_at=datetime.now().astimezone().isoformat())
+                    save_ledger(rows)
+                    print(f"Already imported; added to {PHOTOS_ALBUM}: {name}")
+                    if request_path:
+                        update_remote_request(
+                            request_path,
+                            "imported",
+                            f"Already in Apple Photos; added to {PHOTOS_ALBUM}",
+                        )
+                    continue
+                except PhotosUnavailable as error:
+                    print(f"WAITING {name}: {error}", file=sys.stderr)
+                    if request_path:
+                        update_remote_request(request_path, "waiting_for_unlock", str(error))
+                    continue
             if args.dry_run:
                 print(f"Would import: {name}")
                 continue
@@ -236,12 +292,22 @@ def main():
                 identifier = found or import_photo(path)
                 if not identifier:
                     raise RuntimeError(f"Photos returned no media ID for {name}")
+                album_identifier = add_to_album(name, identifier)
+                if not album_identifier:
+                    raise RuntimeError(f"Photos imported {name} but could not find it for album assignment")
                 rows[name].update(status="imported", photos_id=identifier,
                                   updated_at=datetime.now().astimezone().isoformat())
                 save_ledger(rows)
-                print(f"{'Already in Photos' if found else 'Imported'}: {name}")
+                print(
+                    f"{'Already in Photos' if found else 'Imported'}; "
+                    f"added to {PHOTOS_ALBUM}: {name}"
+                )
                 if request_path:
-                    update_remote_request(request_path, "imported", "Imported into Apple Photos")
+                    update_remote_request(
+                        request_path,
+                        "imported",
+                        f"Imported into Apple Photos and added to {PHOTOS_ALBUM}",
+                    )
             except PhotosUnavailable as error:
                 print(f"WAITING {name}: {error}", file=sys.stderr)
                 if request_path:

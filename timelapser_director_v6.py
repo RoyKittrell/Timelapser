@@ -1477,7 +1477,7 @@ request_active = photos_request.get("status") in {
     "requested", "processing", "waiting_for_unlock",
 }
 if st.button(
-    "Download clean video to Mac Photos",
+    "Import clean video to Timelapser.118",
     use_container_width=True,
     disabled=not clean_reel.exists() or request_active,
 ):
@@ -1489,7 +1489,10 @@ elif photos_request:
     photos_status = str(photos_request.get("status") or "unknown").replace("_", " ").title()
     st.caption(f"{photos_status}: {photos_request.get('message', '')}")
 else:
-    st.caption("Queues this selected run; the Mac downloads and imports it when awake.")
+    st.caption(
+        "Queues this selected run; the Mac downloads it, imports it into Photos, "
+        "and adds it to the Timelapser.118 album when awake."
+    )
 
 with st.expander("Run files"):
     st.code(str(run_dir), language=None)
