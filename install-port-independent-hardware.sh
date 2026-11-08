@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="/home/roy/Timelapser Sept2026/timelapser_v5"
+ROOT="/home/timelapser/Timelapser Sept2026/timelapser_v5"
 HOME_PROFILE="netplan-wlan0-_A29-01"
 CAMERA_PROFILE="E-M5MKIII-P-BJ8A00203"
 HOME_MAC="00:C0:CA:B8:4C:EE"

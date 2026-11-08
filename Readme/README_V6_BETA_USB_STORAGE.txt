@@ -11,7 +11,7 @@ Current physical finding
 When the E-M5 Mark III is connected to the Pi and set to USB Storage:
 
 - Linux exposes it as a USB mass-storage disk, currently /dev/sda.
-- The card mounts at /media/roy/5B48-8907.
+- The card mounts at /media/timelapser/5B48-8907.
 - The camera files are visible under DCIM/100OLYMP.
 - The Olympus Wi-Fi API at 192.168.0.10 refuses connections while the camera is
   in USB Storage mode.
@@ -34,16 +34,16 @@ be reused across runs.
 
 Dry run newest run:
 
-    /home/roy/timelapser-venv/bin/python3 timelapser_v6_beta_usb_import.py --latest --dry-run
+    /home/timelapser/timelapser-venv/bin/python3 timelapser_v6_beta_usb_import.py --latest --dry-run
 
 Import one run:
 
-    /home/roy/timelapser-venv/bin/python3 timelapser_v6_beta_usb_import.py \
+    /home/timelapser/timelapser-venv/bin/python3 timelapser_v6_beta_usb_import.py \
       20260911_182903_sunset_v5_wifi --replace-thumbnails
 
 Scan all runs and import only exact matches:
 
-    /home/roy/timelapser-venv/bin/python3 timelapser_v6_beta_usb_import.py \
+    /home/timelapser/timelapser-venv/bin/python3 timelapser_v6_beta_usb_import.py \
       --all --replace-thumbnails
 
 Outputs

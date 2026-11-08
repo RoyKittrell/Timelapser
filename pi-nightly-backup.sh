@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-BACKUP_DRIVE="/media/roy/My Passport"
+BACKUP_DRIVE="/media/timelapser/My Passport"
 BACKUP_UUID="C6BEB888BEB87293"
 BACKUP_ROOT="$BACKUP_DRIVE/Pi SD Backups"
 KEEP_BACKUPS=2
@@ -83,7 +83,7 @@ lsblk -o NAME,PATH,SIZE,FSTYPE,LABEL,UUID,PARTUUID,MOUNTPOINTS >"$WORK_DIR/lsblk
 sfdisk --dump /dev/mmcblk0 >"$WORK_DIR/mmcblk0-partitions.sfdisk"
 dpkg-query -W -f='${binary:Package}\t${Version}\n' >"$WORK_DIR/packages.tsv"
 cp -a /etc/fstab /boot/firmware/cmdline.txt "$WORK_DIR/"
-cp -a /home/roy/Timelapser\ Sept2026/timelapser_v5/PI_BACKUP_RESTORE.md "$WORK_DIR/RESTORE.md"
+cp -a /home/timelapser/Timelapser\ Sept2026/timelapser_v5/PI_BACKUP_RESTORE.md "$WORK_DIR/RESTORE.md"
 
 log "ARCHIVE: root filesystem"
 tar --acls --xattrs --numeric-owner --one-file-system \

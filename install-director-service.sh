@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="/home/roy/Timelapser Sept2026/timelapser_v5"
+ROOT="/home/timelapser/Timelapser Sept2026/timelapser_v5"
 
 # Keep the camera on the internal adapter and the home network on USB Wi-Fi.
 nmcli connection modify netplan-wlan0-_A29-01 \

@@ -9,7 +9,9 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 CONTROL_DIR = PROJECT_ROOT / "control_v6"
-DEFAULT_OUTPUT_ROOT = Path(os.environ.get("TIMELAPSER_OUTPUT_ROOT", "/media/roy/My Passport/Timelapser"))
+DEFAULT_OUTPUT_ROOT = Path(
+    os.environ.get("TIMELAPSER_OUTPUT_ROOT", "/media/timelapser/TimelapseArchive/Timelapser")
+)
 
 # Verified 2026-10-09 against the installed relay modules and live camera:
 # GPIO23 drives AF and GPIO24 drives release. Both relay inputs assert HIGH and
@@ -38,6 +40,12 @@ SCHEDULER_PAUSE_FILE = CONTROL_DIR / "scheduler_paused.json"
 PREFLIGHT_ALERT_FILE = CONTROL_DIR / "director_preflight_alert.json"
 CAMERA_ALIVE_STATE = CONTROL_DIR / "camera_alive.json"
 CAMERA_OPERATION_LOCK = CONTROL_DIR / "camera_operation.lock"
+TEST_SHOT_DIR = CONTROL_DIR / "test_shots"
+TEST_SHOT_IMAGE = TEST_SHOT_DIR / "latest.jpg"
+TEST_SHOT_STATE = TEST_SHOT_DIR / "latest.json"
+TEST_SHOT_MAX_AGE_SECONDS = float(
+    os.environ.get("TIMELAPSER_V6_TEST_SHOT_MAX_AGE_SECONDS", "86400")
+)
 
 # A successful physical camera check in the preflight window can be reused at
 # mission start. The normal scheduler preflight is ten minutes before capture.

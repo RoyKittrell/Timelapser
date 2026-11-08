@@ -22,10 +22,10 @@ Design goals
 
 Typical use
 -----------
-    source /home/roy/timelapser-venv/bin/activate
+    source /home/timelapser/timelapser-venv/bin/activate
 
     python3 download_run_fullres.py \
-        "/home/roy/Timelapser Sept2026/timelapser_v5/20260910_110739_sunset_v5_wifi"
+        "/home/timelapser/Timelapser Sept2026/timelapser_v5/20260910_110739_sunset_v5_wifi"
 
 Or automatically choose the newest V5 run:
     python3 download_run_fullres.py --latest
@@ -67,7 +67,7 @@ except Exception as exc:
     )
 
 
-DEFAULT_V5_ROOT = Path("/home/roy/Timelapser Sept2026/timelapser_v5")
+DEFAULT_V5_ROOT = Path("/home/timelapser/Timelapser Sept2026/timelapser_v5")
 DEFAULT_OUTPUT_DIRNAME = "frames_full_jpeg"
 
 # A real E-M1/E-M5 full JPEG can be many MB.  This is deliberately low enough

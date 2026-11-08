@@ -58,18 +58,18 @@ INSTALL
 -------
 The overlay renderer needs Pillow as well as FFmpeg:
 
-    source /home/roy/timelapser-venv/bin/activate
+    source /home/timelapser/timelapser-venv/bin/activate
     pip install pillow
     sudo apt install ffmpeg
 
 NORMAL COMMAND
 --------------
-    cd "/home/roy/Timelapser Sept2026/timelapser_v5"
-    source /home/roy/timelapser-venv/bin/activate
+    cd "/home/timelapser/Timelapser Sept2026/timelapser_v5"
+    source /home/timelapser/timelapser-venv/bin/activate
 
     python3 render_timelapse.py \
-      "/home/roy/Timelapser Sept2026/timelapser_v5/RUN_FOLDER" \
-      --source "/home/roy/Timelapser Sept2026/timelapser_v5/RUN_FOLDER/frames_full_jpeg"
+      "/home/timelapser/Timelapser Sept2026/timelapser_v5/RUN_FOLDER" \
+      --source "/home/timelapser/Timelapser Sept2026/timelapser_v5/RUN_FOLDER/frames_full_jpeg"
 
 That makes clean + brightness + director videos by default.
 

@@ -12,6 +12,13 @@ import timelapser_postprocess_v5 as legacy
 import v6_config
 
 
+def read_json(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return {}
+
+
 def run_postprocess(
     run_dir: Path,
     *,
@@ -22,11 +29,13 @@ def run_postprocess(
     root = Path(__file__).resolve().parent
     log_path = run_dir / "postprocess_workflow.log"
     python = legacy._python_executable()
+    prior_live = read_json(run_dir / "postprocess_live_status.json")
+    completed_steps = set(prior_live.get("completed_steps") or [])
     legacy._write_live_status(
         log_path,
         status="running",
         current_step="import_wired_v6_jpegs_via_mega4_usb",
-        completed_steps=[],
+        completed_steps=sorted(completed_steps),
         started_at=datetime.now().astimezone().isoformat(timespec="seconds"),
         publish_instagram=bool(publish_instagram),
         instagram_reel_only=bool(instagram_reel_only),
@@ -34,24 +43,42 @@ def run_postprocess(
         ended_at="",
         error="",
     )
-    import_step = legacy._run_step(
-        log_path,
-        "import_wired_v6_jpegs_via_mega4_usb",
-        [python, str(root / "mega4_usb_import.py"), str(run_dir), "--v6"],
-        root,
-    )
+    if "import_wired_v6_jpegs_via_mega4_usb" in completed_steps:
+        import_step = {
+            "name": "import_wired_v6_jpegs_via_mega4_usb",
+            "returncode": 0,
+            "resumed_skip": True,
+            "elapsed_seconds": 0.0,
+        }
+    else:
+        import_step = legacy._run_step(
+            log_path,
+            "import_wired_v6_jpegs_via_mega4_usb",
+            [python, str(root / "mega4_usb_import.py"), str(run_dir), "--v6"],
+            root,
+        )
     if import_step["returncode"] != 0:
         result = {"status": "failed_v6_usb_import", "steps": [import_step]}
         (run_dir / "postprocess_workflow_summary.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
         legacy._write_live_status(log_path, status=result["status"], current_step="")
         return result
 
-    learning_step = legacy._run_step(
-        log_path,
-        "update_v6_exposure_model",
-        [python, str(root / "v6_exposure_learning.py"), str(run_dir.parent)],
-        root,
-    )
+    completed_steps.add(import_step["name"])
+    if "update_v6_exposure_model" in completed_steps:
+        learning_step = {
+            "name": "update_v6_exposure_model",
+            "returncode": 0,
+            "resumed_skip": True,
+            "elapsed_seconds": 0.0,
+        }
+    else:
+        learning_step = legacy._run_step(
+            log_path,
+            "update_v6_exposure_model",
+            [python, str(root / "v6_exposure_learning.py"), str(run_dir.parent)],
+            root,
+        )
+    completed_steps.add(learning_step["name"])
 
     result = legacy.run_postprocess(
         run_dir,
@@ -64,11 +91,11 @@ def run_postprocess(
         publish_instagram=publish_instagram,
         instagram_reel_only=instagram_reel_only,
         copy_videos_to_mac=v6_config.COPY_VIDEOS_TO_MAC,
-        initial_completed_steps=(import_step["name"], learning_step["name"]),
+        initial_completed_steps=tuple(sorted(completed_steps)),
     )
     result.setdefault("steps", []).insert(0, import_step)
     result["steps"].insert(1, learning_step)
-    if result.get("status") == "complete":
+    if result.get("status") == "complete" and "erase_camera_sd_after_success" not in completed_steps:
         cleanup_step = legacy._run_step(
             log_path,
             "erase_camera_sd_after_success",

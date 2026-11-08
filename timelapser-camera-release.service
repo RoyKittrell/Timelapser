@@ -1,0 +1,13 @@
+[Unit]
+Description=Release Olympus camera USB data port at boot
+After=local-fs.target systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+Before=timelapser-scheduler-v6.service timelapser-director-v6.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/timelapser-camera-usb off
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

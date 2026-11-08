@@ -5,10 +5,10 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=roy
-WorkingDirectory=/home/roy/timelapser_v5_current
+User=timelapser
+WorkingDirectory=/home/timelapser/timelapser_v5_current
 ExecStartPre=/usr/bin/sudo /usr/local/sbin/timelapser-camera-usb discover-and-off
-ExecStart=/home/roy/timelapser-venv/bin/python3 /home/roy/timelapser_v5_current/timelapser_scheduler.py
+ExecStart=/home/timelapser/timelapser-venv/bin/python3 /home/timelapser/timelapser_v5_current/timelapser_scheduler.py
 Restart=on-failure
 RestartSec=15
 

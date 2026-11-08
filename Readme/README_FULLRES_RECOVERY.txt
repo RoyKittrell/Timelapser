@@ -39,10 +39,10 @@ Safety/reliability
 
 Recommended command
 -------------------
-source /home/roy/timelapser-venv/bin/activate
+source /home/timelapser/timelapser-venv/bin/activate
 
 python3 download_run_fullres.py \
-  "/home/roy/Timelapser Sept2026/timelapser_v5/<RUN_FOLDER>"
+  "/home/timelapser/Timelapser Sept2026/timelapser_v5/<RUN_FOLDER>"
 
 Or newest run:
 

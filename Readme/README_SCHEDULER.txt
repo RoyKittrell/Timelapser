@@ -30,15 +30,15 @@ INSTALL
 -------
 Copy schedule.py and timelapser_scheduler.py into:
 
-    /home/roy/Timelapser Sept2026/timelapser_v5/
+    /home/timelapser/Timelapser Sept2026/timelapser_v5/
 
 
 STATUS / DRY OPERATION
 ----------------------
 See what the scheduler thinks will happen:
 
-    cd "/home/roy/Timelapser Sept2026/timelapser_v5"
-    source /home/roy/timelapser-venv/bin/activate
+    cd "/home/timelapser/Timelapser Sept2026/timelapser_v5"
+    source /home/timelapser/timelapser-venv/bin/activate
     python3 timelapser_scheduler.py --status
 
 Run one scheduler decision tick and exit:

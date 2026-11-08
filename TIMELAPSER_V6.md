@@ -14,13 +14,15 @@ its own SD card.
 - AF is BCM GPIO23 and release is BCM GPIO24.
 - Both module inputs assert HIGH and must be held LOW at process startup,
   failure, signal handling, and normal shutdown.
-- Startup first holds AF for 0.5 seconds to wake a sleeping camera, releases it,
-  and waits 2 seconds. It then holds AF for 2 seconds to focus, releases it, and
-  allows a 0.75 second settling period before shutter-only capture begins.
+- Startup always holds AF for 0.5 seconds to wake a sleeping camera, releases it,
+  and waits 2 seconds. Unless `--skip-autofocus` is set, it then holds AF for 2
+  seconds to focus, releases it, and allows a 0.75 second settling period before
+  shutter-only capture begins. Scheduled MF runs use `--skip-autofocus`, which
+  preserves manual focus but still performs the mandatory wake pulse.
 - The RM-CB2 interface retains a half-press state after shutter-only pulses.
   V6 therefore performs a 1 second AF pulse after the final frame, including
   interrupted runs, to clear that state before releasing the GPIO controller.
-- `/home/roy/.config/timelapser/v6-hardware.env` can override the assignments
+- `/home/timelapser/.config/timelapser/v6-hardware.env` can override the assignments
   if the physical wiring changes later.
 
 The mapping was recovered from the successful hardware commissioning thread on

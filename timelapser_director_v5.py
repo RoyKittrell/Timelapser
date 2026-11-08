@@ -39,10 +39,10 @@ from v5_image import analyse_jpeg
 from v5_logging import RunLogger
 from v5_state import SharedState, TimelapseState
 
-PROJECT_ROOT = Path('/home/roy/Timelapser Sept2026')
+PROJECT_ROOT = Path('/home/timelapser/Timelapser Sept2026')
 V5_ROOT = PROJECT_ROOT / 'timelapser_v5'
 ENV_FILE = PROJECT_ROOT / 'env' / '.env'
-PYTHON = Path('/home/roy/timelapser-venv/bin/python3')
+PYTHON = Path('/home/timelapser/timelapser-venv/bin/python3')
 TIMELAPSER_SCRIPT = V5_ROOT / 'timelapser_v5.py'
 CONTROL_DIR = V5_ROOT / 'control'
 STOP_REQUEST_FILE = CONTROL_DIR / 'stop_requested.json'

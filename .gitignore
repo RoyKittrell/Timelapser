@@ -16,6 +16,7 @@ camera-wifi-wpa2-fix.txt
 
 # macOS and local Codex working state
 .DS_Store
+.codex/
 .codex_work/
 
 # Timelapser generated state and logs
@@ -50,6 +51,11 @@ _overlay_stage_*/
 *.jpeg
 *.JPG
 *.JPEG
+*.BIN
+rendered_videos/
+Videos/
+Timelapse Editing/
+118 Sunrise*/
 
 # Recovery/import summaries generated during operation
 fullres_manifest.csv
@@ -75,6 +81,16 @@ staging_obsidian/
 
 # Personal operations notes are backed up separately from the public codebase
 obsidian_timelapser/
+
+# Separate local projects, hardware workspaces, raw research and purchases
+EM5 mkiii/
+Enclosure_Planning/
+Overlay QC/
+Page_Turner*/
+XIAO-Page-Turner/
+Order received*
+analysis_runs/
+artifacts/
 
 # Vendored research repositories and generated dependency trees
 github_research/

@@ -28,7 +28,7 @@ except Exception as exc:
         f"Import error: {type(exc).__name__}: {exc}"
     )
 
-V5_ROOT = Path("/home/roy/Timelapser Sept2026/timelapser_v5")
+V5_ROOT = Path("/home/timelapser/Timelapser Sept2026/timelapser_v5")
 DEFAULT_MOUNT_ROOTS = [Path("/media"), Path("/mnt"), Path("/run/media")]
 DEFAULT_OUTPUT_DIRNAME = "frames_full_jpeg"
 MANIFEST_NAME = "usb_fullres_copy_manifest.csv"
@@ -63,7 +63,7 @@ def parse_args() -> argparse.Namespace:
     group.add_argument("run", nargs="?", help="Specific V5 run directory or run folder name.")
     group.add_argument("--latest", action="store_true", help="Import the newest V5 run with telemetry.")
     group.add_argument("--all", action="store_true", help="Scan all V5 runs and import those with exact SD matches.")
-    p.add_argument("--sd-root", type=Path, default=None, help="Mounted SD root, e.g. /media/roy/5B48-8907.")
+    p.add_argument("--sd-root", type=Path, default=None, help="Mounted SD root, e.g. /media/timelapser/5B48-8907.")
     p.add_argument("--output-dirname", default=DEFAULT_OUTPUT_DIRNAME)
     p.add_argument("--dry-run", action="store_true", help="Report mappings without copying or deleting.")
     p.add_argument("--replace-thumbnails", action="store_true", help="Delete frames_jpeg/*.jpg after a complete verified import.")

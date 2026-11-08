@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-ENV_FILE = Path("/home/roy/Timelapser Sept2026/env/.env")
+ENV_FILE = Path("/home/timelapser/Timelapser Sept2026/env/.env")
 DEFAULT_GRAPH_VERSION = "v24.0"
 DEFAULT_DROPBOX_FOLDER = "/Timelapser/instagram_queue"
 

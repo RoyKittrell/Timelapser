@@ -13,12 +13,24 @@ This repository contains both the proven V5 Wi-Fi implementation and the current
 V6 currently provides:
 
 - Wired autofocus and shutter control through active-HIGH 5 V relay modules.
-- An AF wake pulse and settle delay at mission startup, followed by a two-second autofocus operation, shutter-only frame capture, and a final AF pulse that clears the RM-CB2 half-press state.
+- A boot-time camera USB release that prevents the MEGA4 data connection from trapping
+  the camera in disk mode when the complete system receives power together.
+- An AF-contact wake pulse and settle delay at mission startup, optional one-time autofocus for non-MF runs, shutter-only frame capture, and a final AF pulse that clears the RM-CB2 half-press state.
 - Deterministic monotonic capture timing without dependence on Olympus Wi-Fi.
 - Sunrise/sunset relay cadence predicted from successful Aperture Priority EXIF curves, with conservative spacing for long exposures and camera busy time.
 - Post-run camera USB mounting and full-resolution JPEG import.
 - Post-import EXIF extraction, brightness analysis, rendering and Instagram publishing.
+- A 2160x3840 CRF-16/slow BT.709 clean Reel rendered from 3840-edge
+  exposure-smoothed frames, with high-quality 1080p overlay masters for the
+  Instagram carousel.
+- Free-space-aware retention that preserves run records and final published
+  media while removing regenerable frames and redundant videos only under
+  storage pressure.
 - A simplified dashboard that reports only information available during wired capture; image-derived graphs appear after import.
+- Live SHT3X enclosure temperature, relative humidity, dew point and dew margin,
+  plus Raspberry Pi CPU temperature, on the dashboard.
+- Capture and post-processing progress bars with per-stage counts and history-based
+  completion estimates when enough prior timing data is available.
 - Scheduled sunrise, sunset and general missions. Sunrise and sunset runs may publish automatically; general runs remain local.
 
 V5 remains available and supports:
@@ -73,7 +85,7 @@ Shutter relay IN   -> physical pin 18, BCM GPIO24
 
 The installed modules are active-HIGH: HIGH closes the relay and LOW is the safe idle state. Camera common is part of the isolated contact side and must not be connected to Pi ground. Pi 5 V must never be connected to the camera-side `COM`, `NO` or `NC` terminals.
 
-The commissioned sequence first pulses AF for 0.5 seconds to wake a sleeping camera and waits two seconds. It then holds AF for two seconds, returns GPIO23 LOW, waits 0.75 seconds, and uses shutter-only pulses on GPIO24. This prevents the camera from refocusing every frame while allowing normal camera sleep between missions. The RM-CB2 interface retains half-press after shutter-only operation, so V6 finishes with a one-second AF pulse and returns both GPIOs LOW.
+The commissioned sequence first pulses the AF contact for 0.5 seconds to wake a sleeping camera and waits two seconds. Non-MF/manual runs may then hold AF for two seconds and wait another 0.75 seconds; scheduled MF runs skip that autofocus operation. Capture uses shutter-only pulses on GPIO24. The RM-CB2 interface retains half-press after shutter-only operation, so V6 finishes with a one-second AF pulse and returns both GPIOs LOW.
 
 ## V6 Architecture
 
@@ -81,7 +93,7 @@ The wired capture flow is:
 
 1. Scheduler or Director starts a mission.
 2. V6 creates the run manifest and trigger timeline.
-3. GPIO23 wakes the camera, waits for it to become ready, and performs one startup autofocus operation.
+3. GPIO23 wakes the camera and waits for it to become ready. A separate startup autofocus operation is optional and disabled for scheduled MF runs.
 4. GPIO24 triggers each frame while the camera stores JPEGs on its SD card.
 5. After capture, the camera is exposed as USB storage and the newest expected JPEG sequence is imported.
 6. EXIF and brightness telemetry are extracted from the imported images.
@@ -194,8 +206,8 @@ If aperture-priority mode proves smoother, it may become the preferred productio
 Check upcoming missions:
 
 ```bash
-cd "/home/roy/Timelapser Sept2026/timelapser_v5"
-source /home/roy/timelapser-venv/bin/activate
+cd "/home/timelapser/Timelapser Sept2026/timelapser_v5"
+source /home/timelapser/timelapser-venv/bin/activate
 python3 timelapser_scheduler.py --status
 ```
 
@@ -218,8 +230,8 @@ The scheduler reloads `schedule.py` repeatedly, so schedule edits do not normall
 Start the Director dashboard:
 
 ```bash
-cd "/home/roy/Timelapser Sept2026/timelapser_v5"
-source /home/roy/timelapser-venv/bin/activate
+cd "/home/timelapser/Timelapser Sept2026/timelapser_v5"
+source /home/timelapser/timelapser-venv/bin/activate
 streamlit run timelapser_director_v5.py
 ```
 
@@ -241,8 +253,8 @@ The Mac copy step requires SSH from the Pi to the Mac. If macOS Remote Login is 
 Manual postprocess rerun:
 
 ```bash
-cd "/home/roy/Timelapser Sept2026/timelapser_v5"
-source /home/roy/timelapser-venv/bin/activate
+cd "/home/timelapser/Timelapser Sept2026/timelapser_v5"
+source /home/timelapser/timelapser-venv/bin/activate
 python3 timelapser_postprocess_v5.py "/path/to/run_folder"
 ```
 
@@ -285,7 +297,7 @@ only when explicitly run with `--publish`.
 The Raspberry Pi project directory is now a Git repository:
 
 ```bash
-cd "/home/roy/Timelapser Sept2026/timelapser_v5"
+cd "/home/timelapser/Timelapser Sept2026/timelapser_v5"
 git status
 ```
 
@@ -320,9 +332,15 @@ Avoid doing these casually:
 
 Most V5 code treats the SD card as read-only. Full-resolution recovery downloads files from the camera but does not delete or format the card.
 
+V6 automatically clears camera media from `DCIM` only after the complete workflow has succeeded: imported full-resolution JPEGs are revalidated, rendered outputs are verified, and any enabled Instagram publication has completed. Failed or partial workflows retain the camera originals for recovery.
+
+Scheduled and Director preflight checks never mount the camera SD card. The E-M5 III has proven capable of returning visually to shooting mode after a USB-storage round-trip while silently ignoring its wired remote. Camera USB is therefore reserved for post-capture import; preflight checks the output drive, GPIO configuration, services, and that camera storage is currently released.
+
+Scheduled V6 captures briefly pulse the AF contact to wake the camera but skip the separate two-second autofocus operation. The installed camera is manually focused, and the Olympus remote contact has previously latched into a half-press state after AF-first sequences. Autofocus remains an explicit dashboard control; scheduled capture then uses shutter-only pulses and one AF cleanup pulse after the final frame.
+
 ## Third-Party Code And Credits
 
-Timelapser's project code was developed by Roy Kittrell with assistance from OpenAI ChatGPT/Codex.
+Timelapser's project code was developed by the project owner with assistance from OpenAI ChatGPT/Codex.
 
 This repository depends on, references or interoperates with the following external projects and tools:
 
@@ -335,6 +353,16 @@ This repository depends on, references or interoperates with the following exter
 - [FFmpeg](https://ffmpeg.org/), used by the video renderer.
 
 No endorsement by OM Digital Solutions, Olympus, OpenAI or any other third-party project is implied.
+
+## Current configuration and findings
+
+- [Current Timelapser setup](docs/CURRENT_SETUP.md)
+- [Exposure and deflicker findings](docs/EXPOSURE_AND_DEFLICKER_FINDINGS.md)
+- [Apple Photos import](PHOTOS_IMPORT.md)
+
+The public repository deliberately omits private dashboard addresses,
+operator-specific paths, credentials, raw media, run folders, and machine state.
+Use ignored environment files for deployment-specific values.
 
 ## License
 

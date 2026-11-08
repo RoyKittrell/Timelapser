@@ -11,7 +11,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 
-IMAGE_DIRS = ("frames_jpeg", "frames_full_jpeg", "frames_smoothed_luma_v2")
+IMAGE_DIRS = ("frames_jpeg", "frames_full_jpeg", "frames_smoothed_luma_v2", "frames_smoothed_luma_4k")
 RUN_DATE = re.compile(r"^(\d{8})_\d{6}_")
 
 

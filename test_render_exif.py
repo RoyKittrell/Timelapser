@@ -4,10 +4,23 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from render_timelapse import enrich_rows_with_exif
+from render_timelapse import enrich_rows_with_exif, fill_missing_telemetry_times
 
 
 class RenderExifTests(unittest.TestCase):
+    def test_missing_camera_times_fall_back_to_run_bounds(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary)
+            (run_dir / "run_manifest.json").write_text(json.dumps({
+                "started_at": "2026-10-11T06:18:00+08:00",
+                "ended_at": "2026-10-11T07:48:00+08:00",
+            }))
+            rows = [{"time": ""}, {"time": ""}, {"time": ""}]
+            filled = fill_missing_telemetry_times(rows, run_dir)
+            self.assertEqual(filled[0]["time"], "2026-10-11T06:18:00+08:00")
+            self.assertEqual(filled[1]["time"], "2026-10-11T07:03:00+08:00")
+            self.assertEqual(filled[2]["time"], "2026-10-11T07:48:00+08:00")
+
     def test_original_full_jpeg_exif_is_preferred_over_smoothed_source(self):
         with tempfile.TemporaryDirectory() as temporary:
             run_dir = Path(temporary)

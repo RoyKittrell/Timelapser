@@ -28,6 +28,7 @@ def test_wired_camera_pulses_and_releases(monkeypatch):
     assert isinstance(camera.focus, SimulatedOutput)
     camera.autofocus_once(1.0)
     camera.take_picture(0.1)
+    camera.focus_and_take_picture(0.1, 0.1)
     camera.clear_half_press(0.1)
     assert camera.focus.value is False
     assert camera.shutter.value is False
@@ -45,6 +46,8 @@ def test_capture_simulation_creates_trigger_only_run(tmp_path):
         sys.executable, str(Path(__file__).parent / "timelapser_v6.py"),
         "--simulate", "--skip-autofocus", "--output-root", str(tmp_path),
         "--interval", "0.5", "--max-frames", "3", "--max-run-minutes", "1",
+        "--wake-pulse", "0.01", "--wake-settle", "0",
+        "--half-press-clear", "0.01", "--shutter-pulse", "0.01",
     ]
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
@@ -53,6 +56,8 @@ def test_capture_simulation_creates_trigger_only_run(tmp_path):
     assert manifest["completed_frames"] == 3
     assert (run_dir / "trigger_timeline.csv").exists()
     events = (run_dir / "capture_events.jsonl").read_text()
+    assert "camera_wake_complete" in events
+    assert "autofocus_started" not in events
     assert "half_press_clear_complete" in events
     assert not (run_dir / "telemetry.csv").exists()
     assert not (run_dir / "frames_jpeg").exists()
@@ -83,6 +88,7 @@ def test_sunrise_capture_records_adaptive_prediction(tmp_path):
         "--simulate", "--skip-autofocus", "--mode", "sunrise",
         "--event-time", event_time, "--output-root", str(tmp_path),
         "--interval", "5", "--max-frames", "1", "--max-run-minutes", "1",
+        "--wake-pulse", "0.01", "--wake-settle", "0",
         "--half-press-clear", "0.01", "--shutter-pulse", "0.01",
     ]
     result = subprocess.run(command, capture_output=True, text=True, check=False)
@@ -95,10 +101,14 @@ def test_sunrise_capture_records_adaptive_prediction(tmp_path):
     assert "6.0" in timeline
 
 
-def test_usb_import_selects_newest_sequence_and_builds_telemetry(tmp_path):
+def test_usb_import_selects_capture_window_and_does_not_backfill_missed_triggers(tmp_path):
     run_dir = tmp_path / "run_v6_wired"
     run_dir.mkdir()
-    (run_dir / "run_manifest.json").write_text(json.dumps({"completed_frames": 2}))
+    (run_dir / "run_manifest.json").write_text(json.dumps({
+        "completed_frames": 3,
+        "started_at": "2026-10-06T07:00:00+08:00",
+        "ended_at": "2026-10-06T07:00:10+08:00",
+    }))
     sd_root = tmp_path / "sd"
     olympus = sd_root / "DCIM" / "100OLYMP"
     make_jpeg(olympus / "PA010001.JPG", taken="2026:10:06 06:00:00", iso=100)
@@ -108,6 +118,8 @@ def test_usb_import_selects_newest_sequence_and_builds_telemetry(tmp_path):
     result = import_run(run_dir, sd_root)
     assert result["status"] == "complete"
     assert result["imported_frames"] == 2
+    assert result["relay_triggers"] == 3
+    assert result["unmatched_triggers"] == 1
     telemetry = (run_dir / "telemetry.csv").read_text()
     assert "PA010002.JPG" in telemetry
     assert "PA010003.JPG" in telemetry

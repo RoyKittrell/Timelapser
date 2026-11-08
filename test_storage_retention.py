@@ -76,9 +76,15 @@ class StorageRetentionTests(unittest.TestCase):
             (old / outputs[-1]["output"]).unlink()
             self.assertEqual(prune_old_frames.prune(root, 30, today=date(2026, 9, 22)), [])
             (old / outputs[-1]["output"]).write_bytes(b"video")
-            self.assertEqual(len(prune_old_frames.prune(root, 30, dry_run=True, today=date(2026, 9, 22))), 3)
+            self.assertEqual(
+                len(prune_old_frames.prune(root, 30, dry_run=True, today=date(2026, 9, 22))),
+                len(prune_old_frames.IMAGE_DIRS),
+            )
             self.assertTrue((old / "frames_full_jpeg").exists())
-            self.assertEqual(len(prune_old_frames.prune(root, 30, today=date(2026, 9, 22))), 3)
+            self.assertEqual(
+                len(prune_old_frames.prune(root, 30, today=date(2026, 9, 22))),
+                len(prune_old_frames.IMAGE_DIRS),
+            )
             self.assertTrue((old / "render_summary_v3.json").exists())
             self.assertFalse((old / "frames_full_jpeg").exists())
 

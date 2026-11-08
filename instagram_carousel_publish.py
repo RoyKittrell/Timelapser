@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 
-ENV_FILE = Path("/home/roy/Timelapser Sept2026/env/.env")
+ENV_FILE = Path("/home/timelapser/Timelapser Sept2026/env/.env")
 DEFAULT_API_VERSION = "v24.0"
 DEFAULT_API_HOST = "https://graph.instagram.com"
 

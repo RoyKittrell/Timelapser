@@ -17,8 +17,11 @@ Design goals:
 - easy enable/disable
 """
 
+import os
+import sys
 from datetime import date, timedelta
 from math import acos, asin, atan, cos, degrees, floor, radians, sin, tan
+from pathlib import Path
 
 TIMEZONE = "Asia/Kuala_Lumpur"
 
@@ -38,19 +41,23 @@ START_LATE_IF_STILL_ACTIVE = True
 MIN_REMAINING_MINUTES_TO_START = 1
 
 # Main V5 script and Python interpreter.
-PYTHON = "/home/roy/timelapser-venv/bin/python3"
-TIMELAPSER_SCRIPT = "/home/roy/Timelapser Sept2026/timelapser_v5/timelapser_v5_aperture_priority.py"
+PROJECT_ROOT = Path(__file__).resolve().parent
+PYTHON = os.environ.get("TIMELAPSER_PYTHON", sys.executable)
+TIMELAPSER_SCRIPT = os.environ.get(
+    "TIMELAPSER_V5_SCRIPT",
+    str(PROJECT_ROOT / "timelapser_v5_aperture_priority.py"),
+)
 
 # Run data belongs on the external drive. The scheduler refuses to start a
 # mission if this mount is unavailable, preventing accidental writes to SD.
-OUTPUT_MOUNT = "/media/roy/My Passport"
-OUTPUT_ROOT = "/media/roy/My Passport/Timelapser"
+OUTPUT_MOUNT = os.environ.get("TIMELAPSER_OUTPUT_MOUNT", "/srv/timelapser")
+OUTPUT_ROOT = os.environ.get("TIMELAPSER_OUTPUT_ROOT", f"{OUTPUT_MOUNT}/runs")
 
 # Optional post-run commands. These run only after capture stops cleanly.
 DEFAULT_DOWNLOAD_FULLRES_AFTER = True
 DEFAULT_RENDER_AFTER = True
-DEFAULT_COPY_VIDEOS_TO_MAC_AFTER = True
-DEFAULT_MAC_VIDEO_DEST = "roy@192.168.100.191:/Users/roy/Documents/ChatGPT/Timelapser/rendered_videos"
+DEFAULT_MAC_VIDEO_DEST = os.environ.get("TIMELAPSER_MAC_VIDEO_DEST", "").strip()
+DEFAULT_COPY_VIDEOS_TO_MAC_AFTER = bool(DEFAULT_MAC_VIDEO_DEST)
 
 # Exposure/capture defaults.
 # IMPORTANT:
@@ -58,7 +65,7 @@ DEFAULT_MAC_VIDEO_DEST = "roy@192.168.100.191:/Users/roy/Documents/ChatGPT/Timel
 DEFAULTS = {
     "sunrise": {
         "start_offset_minutes": -40,
-        "end_offset_minutes": 50,
+        "end_offset_minutes": 80,
         "interval": 5,
         "mode": "sunrise",
         "iso": 200,
@@ -72,7 +79,7 @@ DEFAULTS = {
         "mac_video_dest": DEFAULT_MAC_VIDEO_DEST,
     },
     "sunset": {
-        "start_offset_minutes": -45,
+        "start_offset_minutes": -75,
         "end_offset_minutes": 70,
         "interval": 5,
         "mode": "sunset",

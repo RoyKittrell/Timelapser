@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="/home/roy/Timelapser Sept2026/timelapser_v5"
+ROOT="/home/timelapser/Timelapser Sept2026/timelapser_v5"
 
 install -o root -g root -m 0755 "$ROOT/pi-nightly-backup.sh" /usr/local/sbin/timelapser-nightly-backup
 install -o root -g root -m 0755 "$ROOT/timelapser-maintenance-cleanup.sh" /usr/local/sbin/timelapser-maintenance-cleanup

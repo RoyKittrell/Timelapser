@@ -63,9 +63,42 @@ def load_mapping(state_file: Path = STATE_FILE) -> dict[str, str | int]:
 
 def run_switch(mapping: dict[str, str | int], action: str) -> None:
     subprocess.run(
-        [UHUBCTL, "-l", str(mapping["hub"]), "-p", str(mapping["port"]), "-a", action],
+        [
+            UHUBCTL, "--exact", "-l", str(mapping["hub"]),
+            "-p", str(mapping["port"]), "-a", action,
+        ],
         check=True,
     )
+
+
+def unmount_camera_storage() -> list[str]:
+    """Unmount mounted Olympus partitions without touching other disks."""
+    result = subprocess.run(
+        ["lsblk", "--json", "-o", "PATH,MODEL,TYPE,MOUNTPOINTS"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    devices = json.loads(result.stdout).get("blockdevices", [])
+    partitions: list[str] = []
+    for device in devices:
+        model = str(device.get("model") or "").replace(" ", "").lower()
+        if "e-m5markiii" not in model:
+            continue
+        for child in device.get("children") or []:
+            mountpoints = [item for item in child.get("mountpoints") or [] if item]
+            if child.get("type") == "part" and mountpoints:
+                partitions.append(str(child["path"]))
+    for partition in partitions:
+        subprocess.run(["umount", partition], check=True)
+    if partitions:
+        subprocess.run(["sync"], check=True)
+    return partitions
+
+
+def safely_power_off(mapping: dict[str, str | int]) -> None:
+    unmount_camera_storage()
+    run_switch(mapping, "off")
 
 
 def main() -> int:
@@ -86,7 +119,7 @@ def main() -> int:
         if not visible:
             print("Olympus USB is not visible; leaving every hub port unchanged")
             return 0
-        run_switch(visible, "off")
+        safely_power_off(visible)
         return 0
     if args.action == "off":
         if not visible:
@@ -99,9 +132,9 @@ def main() -> int:
                 "Olympus USB is not visible; switching off its saved "
                 f"hub={mapping['hub']} port={mapping['port']}"
             )
-            run_switch(mapping, "off")
+            safely_power_off(mapping)
             return 0
-        run_switch(visible, "off")
+        safely_power_off(visible)
         return 0
 
     mapping = visible or load_mapping()

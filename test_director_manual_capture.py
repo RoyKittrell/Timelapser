@@ -57,11 +57,35 @@ class DirectorManualCaptureTests(unittest.TestCase):
             (60.0, 1.0, False),
         )
 
+    def test_parses_hyphenated_duration_and_cadence(self):
+        self.assertEqual(
+            parse_request("start a manual 1-hour V6 wired timelapse at 1-second cadence"),
+            (60.0, 1.0, False),
+        )
+
     def test_parses_minutes_and_every_seconds(self):
         self.assertEqual(
             parse_request("Run a timelapse for 30 minutes every 2.5 seconds"),
             (30.0, 2.5, False),
         )
+
+    def test_parses_do_with_compact_units_and_intervals(self):
+        self.assertEqual(
+            parse_request("Do a 2hr timelapse at 2s intervals now"),
+            (120.0, 2.0, False),
+        )
+
+    def test_parses_more_natural_action_verbs(self):
+        for request in (
+            "Make a timelapse for 45min every 3s",
+            "Create a 45-minute timelapse at 3-second cadence",
+            "Set up a timelapse for 45 minutes at 3 second intervals",
+        ):
+            with self.subTest(request=request):
+                self.assertEqual(parse_request(request), (45.0, 3.0, False))
+
+    def test_negated_action_does_not_prepare_capture(self):
+        self.assertIsNone(parse_request("Don't start a 2hr timelapse at 2s intervals"))
 
     def test_requires_explicit_duration_and_cadence(self):
         self.assertIsNone(parse_request("Start a timelapse now"))

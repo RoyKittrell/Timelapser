@@ -6,7 +6,7 @@ Starts the Streamlit dashboard on localhost:8501, then exposes it privately
 through Tailscale Serve.
 
 Run with:
-    source /home/roy/timelapser-venv/bin/activate
+    source /home/timelapser/timelapser-venv/bin/activate
     python3 launch_v5_director.py
 """
 
@@ -17,11 +17,11 @@ import sys
 import time
 from pathlib import Path
 
-STREAMLIT = "/home/roy/timelapser-venv/bin/streamlit"
-APP = Path("/home/roy/Timelapser Sept2026/timelapser_v5/timelapser_director_v5.py")
+STREAMLIT = "/home/timelapser/timelapser-venv/bin/streamlit"
+APP = Path("/home/timelapser/Timelapser Sept2026/timelapser_v5/timelapser_director_v5.py")
 PORT = 8501
 HOST = "127.0.0.1"
-LOG = Path("/home/roy/Timelapser Sept2026/timelapser_v5/director_streamlit.log")
+LOG = Path("/home/timelapser/Timelapser Sept2026/timelapser_v5/director_streamlit.log")
 
 
 def port_open(host: str, port: int) -> bool:

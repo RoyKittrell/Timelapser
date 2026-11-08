@@ -1,15 +1,16 @@
 [Unit]
 Description=Timelapser V6 wired mission scheduler
-After=network-online.target local-fs.target
+After=network-online.target local-fs.target timelapser-camera-release.service
 Wants=network-online.target
+Requires=timelapser-camera-release.service
 
 [Service]
 Type=simple
-User=roy
-WorkingDirectory=/home/roy/Timelapser Sept2026/timelapser_v5
+User=timelapser
+WorkingDirectory=/home/timelapser/Timelapser Sept2026/timelapser_v5
 Environment=PYTHONUNBUFFERED=1
-EnvironmentFile=-/home/roy/.config/timelapser/v6-hardware.env
-ExecStart=/home/roy/timelapser-venv/bin/python3 timelapser_scheduler_v6.py
+EnvironmentFile=-/home/timelapser/.config/timelapser/v6-hardware.env
+ExecStart=/home/timelapser/timelapser-venv/bin/python3 timelapser_scheduler_v6.py
 Restart=always
 RestartSec=10
 

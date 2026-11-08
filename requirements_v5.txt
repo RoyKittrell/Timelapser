@@ -4,3 +4,8 @@ numpy
 opencv-python
 astral
 python-dotenv
+gpiozero
+Pillow
+pandas
+altair
+streamlit

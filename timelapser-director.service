@@ -5,11 +5,11 @@ After=network-online.target
 
 [Service]
 Type=simple
-User=roy
-Group=roy
-WorkingDirectory=/home/roy/Timelapser Sept2026/timelapser_v5
+User=timelapser
+Group=timelapser
+WorkingDirectory=/home/timelapser/Timelapser Sept2026/timelapser_v5
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/home/roy/timelapser-venv/bin/streamlit run "/home/roy/Timelapser Sept2026/timelapser_v5/timelapser_director_v5.py" --server.address 0.0.0.0 --server.port 8501 --server.headless true --browser.gatherUsageStats false
+ExecStart=/home/timelapser/timelapser-venv/bin/streamlit run "/home/timelapser/Timelapser Sept2026/timelapser_v5/timelapser_director_v5.py" --server.address 0.0.0.0 --server.port 8501 --server.headless true --browser.gatherUsageStats false
 Restart=always
 RestartSec=5
 TimeoutStopSec=15

@@ -27,7 +27,7 @@ from v5_config import (
 from v5_bluetooth import try_wake_camera_wifi
 
 
-# Exact values advertised by Roy's E-M1 Mark III over get_camprop?com=desc.
+# Exact values advertised by the operator's E-M1 Mark III over get_camprop?com=desc.
 ISO_CHOICES = [200, 250, 320, 400, 500, 640, 800, 1000, 1250, 1600]
 APERTURE_CHOICES = [
     2.8, 3.2, 3.5, 4.0, 4.5, 5.0, 5.6, 6.3, 7.1, 8.0

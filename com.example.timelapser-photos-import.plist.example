@@ -3,22 +3,22 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.roy.timelapser-photos-import</string>
+  <string>com.example.timelapser-photos-import</string>
   <key>ProgramArguments</key>
   <array>
     <string>/usr/bin/python3</string>
-    <string>/Users/roy/Library/Application Support/Timelapser/import_timelapses_to_photos.py</string>
+    <string>/Users/your-account/Library/Application Support/Timelapser/import_timelapses_to_photos.py</string>
     <string>--requested</string>
   </array>
   <key>WorkingDirectory</key>
-  <string>/Users/roy/Library/Application Support/Timelapser</string>
+  <string>/Users/your-account/Library/Application Support/Timelapser</string>
   <key>RunAtLoad</key>
   <true/>
   <key>StartInterval</key>
   <integer>60</integer>
   <key>StandardOutPath</key>
-  <string>/Users/roy/Library/Application Support/Timelapser/photos_import_agent.log</string>
+  <string>/Users/your-account/Library/Application Support/Timelapser/photos_import_agent.log</string>
   <key>StandardErrorPath</key>
-  <string>/Users/roy/Library/Application Support/Timelapser/photos_import_agent.error.log</string>
+  <string>/Users/your-account/Library/Application Support/Timelapser/photos_import_agent.error.log</string>
 </dict>
 </plist>

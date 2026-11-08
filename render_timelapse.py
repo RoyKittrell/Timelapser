@@ -147,23 +147,35 @@ def profile_defaults(name: str):
         "instagram-reel-hq": dict(
             width=1080, height=1920, framing="crop", fps=30.0,
             crf=16, preset="slow", maxrate="20M", bufsize="40M",
-            gop=60, color_standard="bt709",
+            gop=60, color_standard="bt709", sharpen=0.25,
         ),
         "instagram-feed": dict(width=1080, height=1350, framing="crop", fps=30.0, crf=18, preset="veryfast"),
-        "portrait4k": dict(width=2160, height=3840, framing="crop", fps=30.0, crf=17, preset="veryfast"),
+        "portrait4k": dict(
+            width=2160, height=3840, framing="crop", fps=30.0,
+            crf=16, preset="slow", maxrate="20M", bufsize="40M",
+            gop=60, color_standard="bt709", sharpen=0.35,
+        ),
         "4k": dict(width=3840, height=2160, framing="crop", fps=30.0, crf=17, preset="veryfast"),
         "native43": dict(width=2880, height=2160, framing="contain", fps=30.0, crf=17, preset="veryfast"),
     }
     return profiles[name].copy()
 
 
-def filter_chain(mode: str, width: int, height: int, color_standard: str | None = None) -> str:
+def filter_chain(
+    mode: str,
+    width: int,
+    height: int,
+    color_standard: str | None = None,
+    sharpen: float | None = None,
+) -> str:
     if mode == "crop":
         chain = f"scale={width}:{height}:force_original_aspect_ratio=increase:flags=lanczos,crop={width}:{height}"
     elif mode == "contain":
         chain = f"scale={width}:{height}:force_original_aspect_ratio=decrease:flags=lanczos,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2"
     else:
         raise ValueError(mode)
+    if sharpen:
+        chain += f",unsharp=5:5:{sharpen}:3:3:0.0"
     if color_standard == "bt709":
         chain += (
             ",scale=in_range=full:out_range=tv:out_color_matrix=bt709"
@@ -597,7 +609,9 @@ def make_overlay_frames(kind: str, rows: list[dict], expected: list[ExpectedFram
 
 def run_ffmpeg(stage: Path, overlay_dir: Path | None, start_frame: int, cfg: dict, output: Path, overwrite: bool):
     fps, w, h = cfg["fps"], cfg["width"], cfg["height"]
-    base_vf = filter_chain(cfg["framing"], w, h, cfg.get("color_standard"))
+    base_vf = filter_chain(
+        cfg["framing"], w, h, cfg.get("color_standard"), cfg.get("sharpen")
+    )
     cmd = ["ffmpeg", "-hide_banner", "-stats", "-y" if overwrite else "-n",
            "-framerate", str(fps), "-start_number", str(start_frame), "-i", str(stage / "frame_%06d.jpg")]
     if overlay_dir is None:
@@ -623,6 +637,8 @@ def main() -> int:
     p.add_argument("--preset", choices=["ultrafast","superfast","veryfast","faster","fast","medium","slow","slower","veryslow"])
     p.add_argument("--output-dir", type=Path, default=None)
     p.add_argument("--output-stem-suffix", default="", help="Suffix appended to output filename stem before profile/kind")
+    p.add_argument("--output-profile-name", default=None,
+                   help="Filename profile label; defaults to the actual encoding profile")
     p.add_argument("--brightness-source", choices=["telemetry","frames"], default="telemetry",
                    help="Use telemetry brightness or measure brightness from the source frames")
     p.add_argument("--brightness-analysis-max-edge", type=int, default=512,
@@ -661,7 +677,8 @@ def main() -> int:
 
     out_dir = (args.output_dir.expanduser().resolve() if args.output_dir else run_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    planned = {kind: out_dir / f"{run_dir.name}{args.output_stem_suffix}_{args.profile}_{kind}.mp4" for kind in outputs}
+    output_profile_name = args.output_profile_name or args.profile
+    planned = {kind: out_dir / f"{run_dir.name}{args.output_stem_suffix}_{output_profile_name}_{kind}.mp4" for kind in outputs}
     collisions = [p for p in planned.values() if p.exists()]
     if collisions and not args.overwrite:
         raise SystemExit("Output exists; use --overwrite:\n" + "\n".join(str(x) for x in collisions))

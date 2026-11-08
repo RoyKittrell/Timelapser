@@ -55,7 +55,7 @@ class CameraUsbPortTests(unittest.TestCase):
                         "type": "disk",
                         "mountpoints": [None],
                         "children": [
-                            {"path": "/dev/sdb1", "type": "part", "mountpoints": ["/media/roy/OLYMPUS"]},
+                            {"path": "/dev/sdb1", "type": "part", "mountpoints": ["/media/timelapser/OLYMPUS"]},
                         ],
                     },
                 ]}),

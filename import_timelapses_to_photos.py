@@ -10,6 +10,7 @@ import os
 import shlex
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -17,13 +18,25 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 DEST = ROOT / "rendered_videos"
 LEDGER = ROOT / "photos_imports.tsv"
-REMOTE = "timelapser"
-REMOTE_ROOT = "/media/roy/My Passport/Timelapser"
-SSH_OPTIONS = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=12",
-               "-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=2",
-               "-o", "HostKeyAlias=timelapser128gb.local",
-               "-i", str(Path.home() / ".ssh/timelapser")]
+REMOTE = os.environ.get("TIMELAPSER_SSH_HOST", "timelapser")
+REMOTE_ROOT = os.environ.get(
+    "TIMELAPSER_REMOTE_ROOT",
+    "/media/timelapser/TimelapseArchive/Timelapser",
+)
+SSH_OPTIONS = [
+    "-o", "BatchMode=yes", "-o", "ConnectTimeout=12",
+    "-o", "ServerAliveInterval=10", "-o", "ServerAliveCountMax=2",
+    "-o", f"HostKeyAlias={os.environ.get('TIMELAPSER_SSH_HOST_KEY_ALIAS', REMOTE)}",
+    "-i", os.environ.get("TIMELAPSER_SSH_KEY", str(Path.home() / ".ssh/timelapser")),
+]
 FIELDS = ("source", "filename", "sha256", "status", "photos_id", "updated_at")
+PHOTOS_LOOKUP_TIMEOUT = 15
+PHOTOS_IMPORT_TIMEOUT = 180
+PHOTOS_ALBUM = "Timelapser.118"
+
+
+class PhotosUnavailable(RuntimeError):
+    """Photos could not complete an import in the current Mac session."""
 
 
 def run(command, **kwargs):
@@ -33,8 +46,9 @@ def run(command, **kwargs):
 def remote_videos():
     code = """
 import json, os, time
-root = '/media/roy/My Passport/Timelapser'
-if not os.path.ismount('/media/roy/My Passport'):
+root = __REMOTE_ROOT__
+mount = os.path.dirname(root)
+if not os.path.ismount(mount):
     raise SystemExit('Pi external drive is not mounted')
 for base, dirs, files in os.walk(root):
     dirs[:] = [d for d in dirs if not d.startswith('.') and not d.startswith('_')]
@@ -45,7 +59,7 @@ for base, dirs, files in os.walk(root):
         size = os.path.getsize(path)
         if size > 0 and time.time() - os.path.getmtime(path) > 120:
             print(json.dumps({'path': path, 'size': size, 'name': name}))
-"""
+""".replace("__REMOTE_ROOT__", repr(REMOTE_ROOT))
     result = run(["ssh", *SSH_OPTIONS, REMOTE, "python3 -c " + shlex.quote(code)],
                  capture_output=True, timeout=45)
     return [json.loads(line) for line in result.stdout.splitlines()]
@@ -55,11 +69,11 @@ def remote_requests():
     code = """
 import json, os
 from pathlib import Path
-root = Path('/media/roy/My Passport/Timelapser')
+root = Path(__REMOTE_ROOT__)
 for request in root.glob('*/photos_import_request.json'):
     try:
         payload = json.loads(request.read_text())
-        if payload.get('status') != 'requested':
+        if payload.get('status') not in {'requested', 'waiting_for_unlock'}:
             continue
         video = request.parent / payload['video_name']
         if video.is_file() and video.stat().st_size > 0:
@@ -67,7 +81,7 @@ for request in root.glob('*/photos_import_request.json'):
                               'name': video.name, 'request_path': str(request)}))
     except (OSError, ValueError, KeyError, TypeError):
         continue
-"""
+""".replace("__REMOTE_ROOT__", repr(REMOTE_ROOT))
     result = run(["ssh", *SSH_OPTIONS, REMOTE, "python3 -c " + shlex.quote(code)],
                  capture_output=True, timeout=45)
     return [json.loads(line) for line in result.stdout.splitlines()]
@@ -130,19 +144,76 @@ def photos_id(filename):
     end tell
     return ""
 end run'''
-    return run(["osascript", "-e", script, filename], capture_output=True).stdout.strip()
+    try:
+        return run(["osascript", "-e", script, filename], capture_output=True,
+                   timeout=PHOTOS_LOOKUP_TIMEOUT).stdout.strip()
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        # A large or sleeping Photos library can make this best-effort lookup
+        # slow or unavailable. The import command below still checks duplicates.
+        return ""
 
 
 def import_photo(path):
     script = '''on run argv
     set sourceFile to POSIX file (item 1 of argv) as alias
     tell application "Photos"
-        set importedItems to import {sourceFile} with skip check duplicates
-        if (count of importedItems) is not 1 then error "Photos did not return one imported item"
+        set importedItems to import {sourceFile}
+        if (count of importedItems) is 0 then return "duplicate"
+        if (count of importedItems) is not 1 then error "Photos returned an unexpected number of imported items"
         return id of item 1 of importedItems
     end tell
 end run'''
-    return run(["osascript", "-e", script, str(path)], capture_output=True).stdout.strip()
+    run(["open", "-gja", "Photos"], capture_output=True, timeout=15)
+    time.sleep(2)
+    try:
+        return run(["osascript", "-e", script, str(path)], capture_output=True,
+                   timeout=PHOTOS_IMPORT_TIMEOUT).stdout.strip()
+    except subprocess.TimeoutExpired as error:
+        raise PhotosUnavailable("Apple Photos did not respond; the Mac may be locked") from error
+    except subprocess.CalledProcessError as error:
+        detail = (error.stderr or "").strip()
+        if "-1712" in detail or "timed out" in detail.lower():
+            raise PhotosUnavailable("Apple Photos did not respond; the Mac may be locked") from error
+        raise RuntimeError(detail or "Apple Photos rejected the import") from error
+
+
+def add_to_album(filename, media_id="", album_name=PHOTOS_ALBUM):
+    script = '''on run argv
+    set targetName to item 1 of argv
+    set targetId to item 2 of argv
+    set albumName to item 3 of argv
+    tell application "Photos"
+        if targetId is not "" then
+            set matches to (every media item whose id is targetId)
+        else
+            set matches to (every media item whose filename is targetName)
+        end if
+        if (count of matches) is 0 then return ""
+        set targetItem to item 1 of matches
+        if not (exists album albumName) then
+            set targetAlbum to make new album named albumName
+        else
+            set targetAlbum to album albumName
+        end if
+        set resolvedId to id of targetItem
+        set albumMatches to (every media item of targetAlbum whose id is resolvedId)
+        if (count of albumMatches) is 0 then add {targetItem} to targetAlbum
+        return resolvedId
+    end tell
+end run'''
+    try:
+        return run(
+            ["osascript", "-e", script, filename, media_id, album_name],
+            capture_output=True,
+            timeout=PHOTOS_IMPORT_TIMEOUT,
+        ).stdout.strip()
+    except subprocess.TimeoutExpired as error:
+        raise PhotosUnavailable("Apple Photos did not respond while updating the album") from error
+    except subprocess.CalledProcessError as error:
+        detail = (error.stderr or "").strip()
+        if "-1712" in detail or "timed out" in detail.lower():
+            raise PhotosUnavailable("Apple Photos did not respond while updating the album") from error
+        raise RuntimeError(detail or f"Apple Photos could not update {album_name}") from error
 
 
 def pull(item):
@@ -189,10 +260,26 @@ def main():
             request_path = item.get("request_path")
             row = rows.get(name)
             if row and row["status"] == "imported":
-                print(f"Already imported: {name}")
-                if request_path:
-                    update_remote_request(request_path, "imported", "Already present in Apple Photos")
-                continue
+                try:
+                    identifier = add_to_album(name, row.get("photos_id", ""))
+                    if not identifier:
+                        raise RuntimeError(f"Imported video is no longer present in Apple Photos: {name}")
+                    rows[name].update(photos_id=identifier,
+                                      updated_at=datetime.now().astimezone().isoformat())
+                    save_ledger(rows)
+                    print(f"Already imported; added to {PHOTOS_ALBUM}: {name}")
+                    if request_path:
+                        update_remote_request(
+                            request_path,
+                            "imported",
+                            f"Already in Apple Photos; added to {PHOTOS_ALBUM}",
+                        )
+                    continue
+                except PhotosUnavailable as error:
+                    print(f"WAITING {name}: {error}", file=sys.stderr)
+                    if request_path:
+                        update_remote_request(request_path, "waiting_for_unlock", str(error))
+                    continue
             if args.dry_run:
                 print(f"Would import: {name}")
                 continue
@@ -211,12 +298,34 @@ def main():
                 identifier = found or import_photo(path)
                 if not identifier:
                     raise RuntimeError(f"Photos returned no media ID for {name}")
+                album_identifier = add_to_album(name, identifier)
+                if not album_identifier:
+                    raise RuntimeError(f"Photos imported {name} but could not find it for album assignment")
                 rows[name].update(status="imported", photos_id=identifier,
                                   updated_at=datetime.now().astimezone().isoformat())
                 save_ledger(rows)
-                print(f"{'Already in Photos' if found else 'Imported'}: {name}")
+                print(
+                    f"{'Already in Photos' if found else 'Imported'}; "
+                    f"added to {PHOTOS_ALBUM}: {name}"
+                )
                 if request_path:
-                    update_remote_request(request_path, "imported", "Imported into Apple Photos")
+                    update_remote_request(
+                        request_path,
+                        "imported",
+                        f"Imported into Apple Photos and added to {PHOTOS_ALBUM}",
+                    )
+            except PhotosUnavailable as error:
+                print(f"WAITING {name}: {error}", file=sys.stderr)
+                if request_path:
+                    try:
+                        update_remote_request(
+                            request_path,
+                            "waiting_for_unlock",
+                            "Downloaded to Mac; waiting for Apple Photos (unlock the Mac if needed)",
+                        )
+                    except Exception:
+                        pass
+                continue
             except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired, RuntimeError) as error:
                 print(f"FAILED {name}: {error}", file=sys.stderr)
                 if request_path:

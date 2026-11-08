@@ -76,8 +76,8 @@ HOLY_GRAIL_TRACKER_WARMUP = 5
 HOLY_GRAIL_RECENCY_DECAY = 0.92
 HOLY_GRAIL_ANOMALY_THRESHOLD_EV = 1.0
 
-ENV_FILE = Path("/home/roy/Timelapser Sept2026/env/.env")
-CONTROL_DIR = Path("/home/roy/Timelapser Sept2026/timelapser_v5/control")
+ENV_FILE = Path("/home/timelapser/Timelapser Sept2026/env/.env")
+CONTROL_DIR = Path("/home/timelapser/Timelapser Sept2026/timelapser_v5/control")
 STOP_REQUEST_FILE = CONTROL_DIR / "stop_requested.json"
 DIRECTOR_CONTROL_LOG = CONTROL_DIR / "director_control.log"
 OUTPUT_FPS = 60

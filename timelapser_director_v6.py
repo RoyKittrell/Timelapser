@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
+import altair as alt
 import streamlit as st
 from dotenv import load_dotenv
 from PIL import Image
@@ -25,12 +26,13 @@ import v6_config
 import mega4_usb_import
 import timelapser_scheduler as scheduler_core
 from enclosure_sensor import read_sht3x
+from v6_camera_alive import ensure_camera_alive, purge_stale_test_shot
 from v6_intervalometer import WiredCamera
 
 
 CAMERA_USB_HELPER = Path("/usr/local/sbin/timelapser-camera-usb")
 REBOOT_HELPER = Path("/usr/local/sbin/timelapser-reboot")
-ENV_FILE = Path("/home/roy/Timelapser Sept2026/env/.env")
+ENV_FILE = Path(os.environ.get("TIMELAPSER_ENV_FILE", Path(__file__).resolve().parent / ".env"))
 MANUAL_CAMERA_LOCK = v6_config.CAMERA_OPERATION_LOCK
 MANUAL_SHOT_SETTLE_SECONDS = 10.0
 CAMERA_USB_SETTLE_SECONDS = 20.0
@@ -38,9 +40,9 @@ WAKE_PULSE_SECONDS = getattr(v6_config, "WAKE_PULSE_SECONDS", 0.5)
 WAKE_SETTLE_SECONDS = getattr(v6_config, "WAKE_SETTLE_SECONDS", 2.0)
 FOCUS_PULSE_SECONDS = getattr(v6_config, "FOCUS_PULSE_SECONDS", 2.0)
 FOCUS_SETTLE_SECONDS = getattr(v6_config, "FOCUS_SETTLE_SECONDS", 0.75)
-TEST_SHOT_DIR = v6_config.CONTROL_DIR / "test_shots"
-TEST_SHOT_IMAGE = TEST_SHOT_DIR / "latest.jpg"
-TEST_SHOT_STATE = TEST_SHOT_DIR / "latest.json"
+TEST_SHOT_DIR = v6_config.TEST_SHOT_DIR
+TEST_SHOT_IMAGE = v6_config.TEST_SHOT_IMAGE
+TEST_SHOT_STATE = v6_config.TEST_SHOT_STATE
 ENCLOSURE_CLIMATE_CACHE = v6_config.CONTROL_DIR / "enclosure_climate.json"
 ACTIVE_CAMERA_JOB_PATTERNS = (
     "timelapser_v6.py",
@@ -56,6 +58,54 @@ MANUAL_OUTPUT_FPS = 30.0
 MANUAL_CONFIRMATION_MINUTES = 10
 
 load_dotenv(ENV_FILE)
+
+
+CAMERA_SHUTTER_SECONDS = tuple(
+    1.0 / denominator
+    for denominator in (
+        8000, 6400, 5000, 4000, 3200, 2500, 2000, 1600, 1250, 1000,
+        800, 640, 500, 400, 320, 250, 200, 160, 125, 100, 80, 60, 50,
+        40, 30, 25, 20, 15, 13, 10, 8, 6, 5, 4, 3, 2,
+    )
+) + (1.0, 1.3, 1.6, 2.0, 2.5, 3.2, 4.0, 5.0, 6.0)
+
+
+def format_camera_shutter(seconds) -> str:
+    try:
+        value = float(seconds)
+    except (TypeError, ValueError):
+        return "—"
+    if not math.isfinite(value) or value <= 0:
+        return "—"
+    nearest = min(CAMERA_SHUTTER_SECONDS, key=lambda item: abs(math.log2(item / value)))
+    if nearest < 1:
+        return f"1/{round(1 / nearest)}"
+    return f'{nearest:g}"'
+
+
+def completed_shutter_chart(values: pd.Series) -> alt.Chart:
+    frame = pd.DataFrame({"Frame": range(1, len(values) + 1), "Seconds": values}).dropna()
+    frame = frame[frame["Seconds"] > 0].copy()
+    frame["Shutter"] = frame["Seconds"].map(format_camera_shutter)
+    low, high = frame["Seconds"].min(), frame["Seconds"].max()
+    ticks = [value for value in CAMERA_SHUTTER_SECONDS if low * 0.8 <= value <= high * 1.25]
+    axis = alt.Axis(
+        title="Shutter speed",
+        values=ticks or None,
+        labelExpr="datum.value < 1 ? '1/' + format(1 / datum.value, '.0f') : format(datum.value, '.2~f') + '\"'",
+        labelOverlap="greedy",
+        grid=True,
+    )
+    return (
+        alt.Chart(frame)
+        .mark_line()
+        .encode(
+            x=alt.X("Frame:Q", title="Frame"),
+            y=alt.Y("Seconds:Q", scale=alt.Scale(type="log"), axis=axis),
+            tooltip=[alt.Tooltip("Frame:Q"), alt.Tooltip("Shutter:N")],
+        )
+        .properties(height=220)
+    )
 
 
 st.set_page_config(page_title="Timelapser V6", page_icon="camera", layout="wide")
@@ -180,6 +230,12 @@ def format_duration(seconds: float | None) -> str:
     return f"{secs}s"
 
 
+def format_total_time_left(seconds: float) -> str:
+    total_minutes = max(0, math.ceil(seconds / 60))
+    hours, minutes = divmod(total_minutes, 60)
+    return f"Estimated {hours}hrs {minutes}min left"
+
+
 POSTPROCESS_STAGES = (
     ("import_wired_v6_jpegs_via_mega4_usb", "Download full JPEGs"),
     ("validate_and_repair_jpegs", "Validate JPEGs"),
@@ -190,7 +246,7 @@ POSTPROCESS_STAGES = (
     ("queue_instagram_reel", "Prepare Instagram package"),
     ("publish_instagram_carousel_and_reel", "Upload to Instagram"),
     *(((("copy_videos_to_mac", "Copy videos to Mac"),) if v6_config.COPY_VIDEOS_TO_MAC else ())),
-    ("prune_rendered_images_older_than_30_days", "Apply image retention"),
+    ("apply_storage_retention", "Apply storage retention"),
 )
 
 FRAME_SCALED_STAGES = {
@@ -280,7 +336,7 @@ def stage_frame_progress(run_dir: Path, current: str, total: int) -> tuple[int, 
     if current == "import_wired_v6_jpegs_via_mega4_usb":
         return min(total, count_jpegs(run_dir / "frames_full_jpeg")), total
     if current == "smooth_exposure_v2":
-        return min(total, count_jpegs(run_dir / "frames_smoothed_luma_v2")), total
+        return min(total, count_jpegs(run_dir / "frames_smoothed_luma_4k")), total
     if current in {"validate_and_repair_jpegs", "validate_smoothed_jpegs"}:
         try:
             log_tail = (run_dir / "postprocess_workflow.log").read_text(
@@ -520,6 +576,14 @@ def render_workflow_overview(run_dir: Path, manifest: dict) -> None:
         overall = 1.0
     else:
         overall = active_group / len(WORKFLOW_GROUPS)
+
+    remaining_estimates = [
+        estimate
+        for _, state, estimate in group_states
+        if state in {"Running", "Waiting"} and estimate is not None
+    ]
+    if remaining_estimates:
+        st.markdown(f"**{format_total_time_left(sum(remaining_estimates))}**")
     st.progress(min(1.0, overall))
     for label, state, estimate in group_states:
         timing = ""
@@ -562,9 +626,15 @@ def render_primary_status() -> None:
     latest = latest_runs[0] if latest_runs else None
     if latest is not None:
         live = read_json(latest / "postprocess_live_status.json")
-        if live.get("status") == "running":
+        if live.get("status") in {"running", "paused_for_capture"}:
             manifest = live_manifest(latest)
-            st.subheader("Processing timelapse")
+            if live.get("status") == "paused_for_capture":
+                st.subheader("Processing paused for scheduled timelapse")
+                mission = str(live.get("paused_for_mission") or "the next capture")
+                stage = str(live.get("paused_step") or "processing").replace("_", " ")
+                st.info(f"Paused during {stage}; it will resume after {mission}.")
+            else:
+                st.subheader("Processing timelapse")
             st.metric("Mission", str(manifest.get("mode") or "general").title())
             render_workflow_overview(latest, manifest)
             return
@@ -877,23 +947,31 @@ def set_scheduler_paused(paused: bool, reason: str) -> str:
 def parse_manual_capture_request(text: str) -> tuple[float, float, bool] | None:
     """Return duration, cadence, and explicit Reel publishing intent."""
     normalized = text.lower().strip()
-    if not re.search(r"\b(start|run|begin|launch)\b", normalized) or not re.search(
-        r"\b(time[ -]?lapse|timelapse)\b", normalized
-    ):
+    timelapse_mentioned = bool(re.search(r"\b(time[ -]?lapse|timelapse)\b", normalized))
+    action_requested = bool(re.search(
+        r"\b(start|run|begin|launch|do|make|create|take|capture|set up)\b",
+        normalized,
+    ))
+    action_negated = bool(re.search(
+        r"\b(?:do not|don't|dont|never)\s+"
+        r"(?:start|run|begin|launch|do|make|create|take|capture|set up)\b",
+        normalized,
+    ))
+    if not timelapse_mentioned or not action_requested or action_negated:
         return None
 
     duration_match = re.search(
-        r"\b(?:for\s+)?(\d+(?:\.\d+)?)\s*(hours?|hrs?|hr|h|minutes?|mins?|min|m)\b",
+        r"\b(?:for\s+)?(\d+(?:\.\d+)?)[\s-]*(hours?|hrs?|hr|h|minutes?|mins?|min|m)\b",
         normalized,
     )
     interval_match = re.search(
         r"\b(?:at|every|cadence(?:\s+of)?|interval(?:\s+of)?)\s*"
-        r"(\d+(?:\.\d+)?)\s*(seconds?|secs?|sec|s)\b",
+        r"(\d+(?:\.\d+)?)[\s-]*(seconds?|secs?|sec|s)\b",
         normalized,
     )
     if interval_match is None:
         interval_match = re.search(
-            r"\b(\d+(?:\.\d+)?)\s*(seconds?|secs?|sec|s)\s*(?:cadence|interval)\b",
+            r"\b(\d+(?:\.\d+)?)[\s-]*(seconds?|secs?|sec|s)\s*(?:cadence|interval)\b",
             normalized,
         )
     if duration_match is None or interval_match is None:
@@ -911,6 +989,39 @@ def parse_manual_capture_request(text: str) -> tuple[float, float, bool] | None:
     ))
     publish_reel = instagram_mentioned and publish_verb and not publish_denied
     return duration_minutes, interval_seconds, publish_reel
+
+
+def manual_capture_request_error(text: str) -> str | None:
+    """Explain incomplete manual capture requests before the AI fallback."""
+    normalized = text.lower().strip()
+    if not re.search(r"\b(time[ -]?lapse|timelapse)\b", normalized):
+        return None
+    if not re.search(r"\b(start|run|begin|launch|do|make|create|take|capture|set up)\b", normalized):
+        return None
+    if re.search(
+        r"\b(?:do not|don't|dont|never)\s+"
+        r"(?:start|run|begin|launch|do|make|create|take|capture|set up)\b",
+        normalized,
+    ):
+        return None
+
+    has_duration = bool(re.search(
+        r"\b(?:for\s+)?\d+(?:\.\d+)?[\s-]*"
+        r"(?:hours?|hrs?|hr|h|minutes?|mins?|min|m)\b",
+        normalized,
+    ))
+    has_cadence = bool(re.search(
+        r"\b\d+(?:\.\d+)?[\s-]*(?:seconds?|secs?|sec|s)\b",
+        normalized,
+    ))
+    if has_duration and has_cadence:
+        return None
+    missing = []
+    if not has_duration:
+        missing.append("duration, such as 2 hours")
+    if not has_cadence:
+        missing.append("cadence, such as every 2 seconds")
+    return "I can prepare that manual timelapse, but I still need " + " and ".join(missing) + "."
 
 
 def manual_timelapse_refusal(duration_minutes: float, interval_seconds: float) -> str | None:
@@ -1034,6 +1145,11 @@ def start_manual_timelapse(
     refusal = manual_timelapse_refusal(duration_minutes, interval_seconds)
     if refusal:
         return refusal
+
+    preflight_key = f"manual-{datetime.now().astimezone().strftime('%Y%m%d-%H%M%S')}"
+    camera_ok, camera_message = ensure_camera_alive(preflight_key)
+    if not camera_ok:
+        return f"Manual timelapse refused: {camera_message}"
 
     max_frames = max(1, math.floor(duration_minutes * 60 / interval_seconds))
     now = datetime.now().astimezone()
@@ -1162,6 +1278,9 @@ def handle_director_command(text: str) -> str | None:
     manual_capture = parse_manual_capture_request(text)
     if manual_capture is not None:
         return prepare_manual_timelapse(*manual_capture)
+    manual_capture_error = manual_capture_request_error(text)
+    if manual_capture_error is not None:
+        return manual_capture_error
     if re.search(r"\bpre[ -]?flight\b", normalized) and re.search(
         r"\b(check|test|run|now)\b", normalized
     ):
@@ -1241,7 +1360,7 @@ def answer_director_question(question: str, run_dir: Path, manifest: dict, post:
 
         response = OpenAI(api_key=api_key).responses.create(
             model="gpt-5.6-luna",
-            instructions="""You are the Timelapser V6 Director for Roy's Raspberry Pi 5 and Olympus E-M5 Mark III.
+            instructions="""You are the Timelapser V6 Director for the operator's Raspberry Pi 5 and Olympus E-M5 Mark III.
 
 V6 triggers autofocus and shutter through isolated wired relays. It cannot see live images, exposure settings, camera mode, SD capacity, or focus confirmation. Image and EXIF analysis becomes available only after USB import. Use only the supplied state for factual claims. Explain missing evidence plainly and be concise.
 
@@ -1346,6 +1465,7 @@ st.caption(
     "the remote state, then uses MEGA4 USB storage to download and release the newest JPEG."
 )
 
+purge_stale_test_shot()
 test_shot = read_json(TEST_SHOT_STATE)
 if test_shot.get("status") == "complete" and TEST_SHOT_IMAGE.exists():
     st.image(
@@ -1378,9 +1498,26 @@ if completed_workflow(post):
     if telemetry_path.exists():
         data = pd.read_csv(telemetry_path)
         st.subheader("Completed-run image data")
-        graph_cols = [name for name in ("median", "actual_iso", "actual_shutter_seconds", "actual_aperture") if name in data]
-        if graph_cols:
-            st.line_chart(data[graph_cols], height=260)
+        chart_specs = (
+            ("actual_iso", "ISO", "ISO sensitivity"),
+            ("actual_shutter_seconds", "Shutter speed", "Seconds"),
+        )
+        for column, title, axis_label in chart_specs:
+            if column not in data:
+                continue
+            values = pd.to_numeric(data[column], errors="coerce")
+            if not values.notna().any():
+                continue
+            st.markdown(f"**{title}**")
+            if column == "actual_shutter_seconds":
+                st.altair_chart(completed_shutter_chart(values), use_container_width=True)
+            else:
+                st.line_chart(
+                    pd.DataFrame({axis_label: values}),
+                    x_label="Frame",
+                    y_label=axis_label,
+                    height=220,
+                )
         st.caption("Extracted from full JPEGs after USB import; rendering and publishing are complete.")
 else:
     st.info("Exposure and brightness graphs unlock after download, rendering, and upload all complete.")
@@ -1388,9 +1525,11 @@ else:
 st.subheader("Apple Photos")
 clean_reel = run_dir / f"{run_dir.name}_final_instagram-reel_clean.mp4"
 photos_request = read_json(run_dir / "photos_import_request.json")
-request_active = photos_request.get("status") in {"requested", "processing"}
+request_active = photos_request.get("status") in {
+    "requested", "processing", "waiting_for_unlock",
+}
 if st.button(
-    "Download clean video to Mac Photos",
+    "Import clean video to Timelapser.118",
     use_container_width=True,
     disabled=not clean_reel.exists() or request_active,
 ):
@@ -1402,7 +1541,10 @@ elif photos_request:
     photos_status = str(photos_request.get("status") or "unknown").replace("_", " ").title()
     st.caption(f"{photos_status}: {photos_request.get('message', '')}")
 else:
-    st.caption("Queues this selected run; the Mac downloads and imports it when awake.")
+    st.caption(
+        "Queues this selected run; the Mac downloads it, imports it into Photos, "
+        "and adds it to the Timelapser.118 album when awake."
+    )
 
 with st.expander("Run files"):
     st.code(str(run_dir), language=None)
